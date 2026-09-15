@@ -35,8 +35,6 @@ def build_compose_run_command(
     command = [
         "docker",
         "compose",
-        "--project-directory",
-        str(workflow.working_directory),
         "-f",
         str(workflow.compose_file),
         "run",

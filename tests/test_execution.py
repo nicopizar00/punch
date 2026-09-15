@@ -80,7 +80,11 @@ class ExecutionTests(unittest.TestCase):
             {"BASE_URL": "http://target", "RUN_ID": "run-7", "SECRET": "ignored"},
         )
         self.assertEqual(command.count("run"), 2)
-        self.assertEqual(command[:4], ["docker", "compose", "--project-directory", str(self.root)])
+        self.assertEqual(
+            command[:5],
+            ["docker", "compose", "-f", str(self.root / "docker-compose.yml"), "run"],
+        )
+        self.assertNotIn("--project-directory", command)
         self.assertIn("BASE_URL=http://target", command)
         self.assertIn("RUN_ID=run-7", command)
         self.assertNotIn("SECRET=ignored", command)
@@ -175,6 +179,22 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(arguments.count("compose"), 1)
         self.assertEqual(arguments.count("run"), 2)
         self.assertEqual(arguments.count("k6"), 1)
+        self.assertEqual(
+            arguments,
+            [
+                "compose",
+                "-f",
+                str(self.root / "docker-compose.yml"),
+                "run",
+                "--rm",
+                "-e",
+                "RUN_ID=run-7",
+                "k6",
+                "run",
+                "/scripts/csv-output.js",
+            ],
+        )
+        self.assertNotIn("--project-directory", arguments)
         self.assertEqual(arguments[-3:], ["k6", "run", "/scripts/csv-output.js"])
         self.assertEqual(forwarded, ["RUN_ID=run-7"])
         self.assertNotIn("BASE_URL=http://target", arguments)
