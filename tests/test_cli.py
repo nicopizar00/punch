@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from punch.__main__ import main
+
+
+FAKE_DOCKER = """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+arguments = Path(os.environ["FAKE_DOCKER_ARGS"])
+with arguments.open("a", encoding="utf-8") as file:
+    file.write(json.dumps(sys.argv[1:]) + "\\n")
+
+sequence_path = Path(os.environ["FAKE_DOCKER_EXIT_SEQUENCE"])
+sequence = json.loads(sequence_path.read_text(encoding="utf-8"))
+exit_code = sequence.pop(0) if sequence else 0
+sequence_path.write_text(json.dumps(sequence), encoding="utf-8")
+raise SystemExit(exit_code)
+"""
+
+
+CSV_WORKFLOW = """\
+apiVersion: punch/v1
+kind: K6Workflow
+metadata:
+  name: csv-fixture
+spec:
+  workingDirectory: .
+  compose:
+    file: docker-compose.yml
+    service: k6
+  k6:
+    script: /scripts/csv-fixture.js
+  outputs:
+    csv:
+      path: reports/data/fixture.csv
+"""
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = TemporaryDirectory(dir=Path(__file__).resolve().parents[1])
+        self.root = Path(self.temporary_directory.name)
+        self.state_dir = self.root / "state"
+        self.logs_dir = self.root / "logs"
+        self.bin_dir = self.root / "bin"
+        self.bin_dir.mkdir()
+        self.args_path = self.root / "docker-arguments.jsonl"
+        self.exit_sequence_path = self.root / "docker-exit-sequence.json"
+        self.configure_fake_exit_sequence([])
+
+        docker = self.bin_dir / "docker"
+        docker.write_text(FAKE_DOCKER, encoding="utf-8")
+        docker.chmod(0o755)
+
+        shutil.copy(Path(__file__).resolve().parent / "fixtures" / "docker-compose.yml", self.root / "docker-compose.yml")
+        self.workflow_path = self.root / "workflow.yaml"
+        self.workflow_path.write_text(CSV_WORKFLOW.replace("  outputs:\n    csv:\n      path: reports/data/fixture.csv\n", ""), encoding="utf-8")
+        self.csv_workflow_path = self.root / "csv-workflow.yaml"
+        self.csv_workflow_path.write_text(CSV_WORKFLOW, encoding="utf-8")
+
+        self.environment = {
+            **os.environ,
+            "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_DOCKER_ARGS": str(self.args_path),
+            "FAKE_DOCKER_EXIT_SEQUENCE": str(self.exit_sequence_path),
+        }
+        self.module_patch = patch.multiple(
+            "punch.__main__", STATE_DIR=self.state_dir, LOGS_DIR=self.logs_dir
+        )
+        self.module_patch.start()
+        self.environment_patch = patch.dict(os.environ, self.environment, clear=True)
+        self.environment_patch.start()
+
+    def tearDown(self) -> None:
+        self.environment_patch.stop()
+        self.module_patch.stop()
+        self.temporary_directory.cleanup()
+
+    def configure_fake_exit_sequence(self, exit_codes: list[int]) -> None:
+        self.exit_sequence_path.write_text(json.dumps(exit_codes), encoding="utf-8")
+
+    def fake_docker_arguments(self) -> list[str]:
+        if not self.args_path.exists():
+            return []
+        return [argument for line in self.args_path.read_text(encoding="utf-8").splitlines() for argument in json.loads(line)]
+
+    def compose_run_count(self) -> int:
+        return sum(arguments.count("run") == 2 for arguments in self.fake_docker_calls())
+
+    def fake_docker_calls(self) -> list[list[str]]:
+        if not self.args_path.exists():
+            return []
+        return [json.loads(line) for line in self.args_path.read_text(encoding="utf-8").splitlines()]
+
+    def test_named_selector_resolves_bundled_yaml_and_runs_once(self) -> None:
+        rc = main(["run", "smoke"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.compose_run_count(), 1)
+        self.assertNotIn("build", self.fake_docker_arguments())
+
+    def test_direct_yaml_path_is_accepted(self) -> None:
+        rc = main(["run", str(self.workflow_path)])
+        self.assertEqual(rc, 0)
+
+    def test_csv_path_refuses_noninteractive_run_without_flag(self) -> None:
+        rc = main(["run", str(self.csv_workflow_path)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+
+    def test_confirm_output_data_allows_noninteractive_csv_run(self) -> None:
+        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.compose_run_count(), 1)
+
+    def test_direct_external_workflow_requires_target_before_run(self) -> None:
+        rc = main(["run", "bff-checkout-journey"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+
+    def test_all_skips_external_workflow_without_target(self) -> None:
+        rc = main(["run", "all"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.compose_run_count(), 3)
+
+    def test_keep_going_and_child_exit_code_behavior_is_preserved(self) -> None:
+        self.configure_fake_exit_sequence([0, 9, 0])
+        rc = main(["run", "all", "--keep-going"])
+        self.assertEqual(rc, 9)
+        self.assertEqual(self.compose_run_count(), 3)
+
+    def test_evidence_records_workflow_and_csv_fields(self) -> None:
+        self.assertEqual(main(["run", "smoke"]), 0)
+        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
+        self.assertIn("workflow", record["results"][0])
+        self.assertIn("csvRecordCount", record["results"][0])
+
+
+if __name__ == "__main__":
+    unittest.main()

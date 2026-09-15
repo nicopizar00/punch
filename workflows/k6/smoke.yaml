@@ -1,0 +1,13 @@
+apiVersion: punch/v1
+kind: K6Workflow
+metadata:
+  name: smoke
+spec:
+  workingDirectory: ../..
+  compose:
+    file: docker-compose.yml
+    service: k6
+  k6:
+    script: /scripts/smoke.js
+  environment:
+    forward: [TARGET_BASE_URL, CATALOG_URL, ORDERS_URL]

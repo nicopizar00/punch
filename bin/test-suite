@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo_root"
+
 mkdir -p reports/state reports/logs
 docker compose build
 docker compose up -d --wait gateway-api
 
-docker compose run --rm k6 run /scripts/smoke.js
-docker compose run --rm k6 run /scripts/catalog-gate.js
-docker compose run --rm k6 run /scripts/order-journey.js
+cleanup() {
+  docker compose down --volumes --remove-orphans
+}
+trap cleanup EXIT
 
-docker compose logs gateway-api > reports/logs/gateway-api.log 2>&1 || true
-docker compose logs catalog-api > reports/logs/catalog-api.log 2>&1 || true
-docker compose logs orders-api  > reports/logs/orders-api.log  2>&1 || true
-docker compose logs postgres    > reports/logs/postgres.log    2>&1 || true
-
-docker compose down --volumes --remove-orphans
+./bin/punch run all --collect-logs

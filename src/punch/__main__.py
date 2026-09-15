@@ -24,19 +24,12 @@ REPORTS_DIR = REPO_ROOT / "reports"
 STATE_DIR = REPORTS_DIR / "state"
 LOGS_DIR = REPORTS_DIR / "logs"
 
-TESTS = {
-    "smoke":   "/scripts/smoke.js",
-    "gate":    "/scripts/catalog-gate.js",
-    "journey": "/scripts/order-journey.js",
-    "bff-checkout-journey": "/scripts/bff-checkout-journey.js",
-}
-
-# Tests that target an EXTERNAL host (not the in-network reference app) and so
-# require an explicit env var. In a full-suite run (`run all`) they are SKIPPED —
-# not failed — when their env is unset, keeping the in-network gate green. Run them
-# directly (e.g. `punch run bff-checkout-journey`) with the env set to execute them.
-REQUIRES_ENV = {
-    "bff-checkout-journey": "TARGET_BASE_URL",
+BUNDLED_WORKFLOW_DIR = REPO_ROOT / "workflows" / "k6"
+BUNDLED_WORKFLOWS = {
+    "smoke": BUNDLED_WORKFLOW_DIR / "smoke.yaml",
+    "gate": BUNDLED_WORKFLOW_DIR / "gate.yaml",
+    "journey": BUNDLED_WORKFLOW_DIR / "journey.yaml",
+    "bff-checkout-journey": BUNDLED_WORKFLOW_DIR / "bff-checkout-journey.yaml",
 }
 
 
@@ -103,27 +96,33 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     py_ok = sys.version_info >= (3, 10)
     checks.append(("python >= 3.10", py_ok, sys.version.split()[0]))
 
+    try:
+        import yaml
+        yaml_ok = True
+        yaml_detail = getattr(yaml, "__version__", "available")
+    except ModuleNotFoundError:
+        yaml_ok = False
+        yaml_detail = "missing"
+    checks.append(("PyYAML available", yaml_ok, yaml_detail))
+
+    workflow_ok = False
+    workflow_detail = "PyYAML missing"
+    if yaml_ok:
+        try:
+            from punch.workflow import WorkflowError, load_workflow
+            for path in BUNDLED_WORKFLOWS.values():
+                load_workflow(path)
+            workflow_ok = True
+            workflow_detail = f"{len(BUNDLED_WORKFLOWS)} validated"
+        except (ImportError, WorkflowError) as error:
+            workflow_detail = str(error)
+    checks.append(("bundled workflows valid", workflow_ok, workflow_detail))
+
     for name, ok, detail in checks:
         mark = "OK  " if ok else "FAIL"
         print(f"  [{mark}] {name}: {detail}")
 
     return 0 if all(ok for _, ok, _ in checks) else 1
-
-
-def _compose_build() -> int:
-    return _stream(["docker", "compose", "build"])
-
-
-def _run_one(test: str) -> int:
-    script = TESTS[test]
-    cmd = ["docker", "compose", "run", "--rm"]
-    # forward any TARGET_ prefixed env vars into the container
-    for k in sorted(os.environ.keys()):
-        if k.startswith("TARGET_"):
-            cmd.extend(["-e", k])
-    cmd.extend(["k6", "run", script])
-    log = LOGS_DIR / f"k6-{test}.log"
-    return _stream(cmd, log_path=log)
 
 
 def _diagnose_target_connectivity() -> None:
@@ -163,57 +162,101 @@ def _collect_service_logs() -> None:
             print(f"[punch] could not collect logs for {svc}: {e}", flush=True)
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    _ensure_dirs()
-    requested = args.test
-    sequence = list(TESTS.keys()) if requested == "all" else [requested]
+def _load_selected_workflows(selector: str):
+    from punch.workflow import WorkflowError, load_workflow
 
+    paths = list(BUNDLED_WORKFLOWS.values()) if selector == "all" else [
+        BUNDLED_WORKFLOWS.get(selector, Path(selector))
+    ]
+    workflows = []
+    for path in paths:
+        if not path.is_file():
+            raise WorkflowError(f"workflow file does not exist: {path}")
+        workflows.append(load_workflow(path))
+    return workflows
+
+
+def _evidence_result(workflow, result, *, skipped: bool = False) -> dict:
+    effective_exit_code = (
+        result.child_exit_code
+        if result.child_exit_code is not None
+        else (0 if result.passed else 1)
+    )
+    return {
+        "test": workflow.name,
+        "workflow": str(workflow.source_path.relative_to(workflow.working_directory)),
+        "exitCode": effective_exit_code,
+        "passed": result.passed,
+        "failure": result.failure,
+        "csvPath": (
+            str(result.csv_path.relative_to(workflow.working_directory))
+            if result.csv_path else None
+        ),
+        "csvRecordCount": result.csv_record_count,
+        **({"skipped": True} if skipped else {}),
+    }
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    from punch.execution import ExecutionResult, confirm_output_data, execute_workflow
+    from punch.workflow import WorkflowError
+
+    _ensure_dirs()
     started = datetime.now(timezone.utc).isoformat()
     t0 = time.monotonic()
-
-    build_rc = _compose_build()
-    if build_rc != 0:
-        _write_evidence({
-            "command": "run",
-            "tests": sequence,
-            "phase": "build",
-            "exitCode": build_rc,
-            "passed": False,
-            "startedAt": started,
-            "durationSeconds": round(time.monotonic() - t0, 2),
-        })
-        return build_rc
+    try:
+        workflows = _load_selected_workflows(args.selector)
+    except WorkflowError as error:
+        print(f"[punch] {error}", file=sys.stderr, flush=True)
+        return 1
 
     results: list[dict] = []
-    overall_rc = 0
-    for test in sequence:
-        required_env = REQUIRES_ENV.get(test)
-        if requested == "all" and required_env and not os.environ.get(required_env):
-            print(
-                f"[punch] SKIP {test}: {required_env} not set "
-                f"(external-target test; run it directly with {required_env} set)",
-                flush=True,
-            )
-            results.append({
-                "test": test,
-                "skipped": True,
-                "reason": f"{required_env} not set",
-                "passed": True,
-            })
+    runnable = []
+    for workflow in workflows:
+        missing = [name for name in workflow.required_environment if name not in os.environ]
+        if args.selector == "all" and missing:
+            failure = f"missing required environment: {', '.join(missing)}"
+            print(f"[punch] SKIP {workflow.name}: {failure}", flush=True)
+            results.append(_evidence_result(
+                workflow,
+                ExecutionResult(workflow.name, (), None, True, failure, workflow.csv_output.path if workflow.csv_output else None, 0),
+                skipped=True,
+            ))
             continue
-        rc = _run_one(test)
-        results.append({"test": test, "exitCode": rc, "passed": rc == 0})
-        if rc != 0:
-            overall_rc = rc
-            if not args.keep_going:
-                break
+        runnable.append(workflow)
+
+    if not confirm_output_data(
+        runnable, assume_yes=args.confirm_output_data, stdin=sys.stdin, stdout=sys.stdout
+    ):
+        print("[punch] CSV output requires --confirm-output-data in noninteractive mode", file=sys.stderr)
+        _write_evidence({
+            "command": "run", "tests": [workflow.name for workflow in workflows], "results": results,
+            "exitCode": 1, "passed": False, "startedAt": started,
+            "durationSeconds": round(time.monotonic() - t0, 2),
+        })
+        return 1
+
+    overall_rc = 0
+    for workflow in runnable:
+        result = execute_workflow(
+            workflow,
+            environment=os.environ,
+            output_data_confirmed=True,
+            log_path=LOGS_DIR / f"k6-{workflow.name}.log",
+        )
+        results.append(_evidence_result(workflow, result))
+        effective_exit_code = result.child_exit_code if result.child_exit_code is not None else 1
+        if not result.passed and overall_rc == 0:
+            overall_rc = effective_exit_code
+        if not result.passed and not args.keep_going:
+            break
 
     if args.collect_logs:
         _collect_service_logs()
 
     _write_evidence({
         "command": "run",
-        "tests": sequence,
+        "tests": [workflow.name for workflow in workflows],
         "results": results,
         "exitCode": overall_rc,
         "passed": overall_rc == 0,
@@ -243,12 +286,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="Check host prerequisites (docker, compose, python).")
 
-    run_p = sub.add_parser("run", help="Run a k6 test (or all) via docker compose.")
-    run_p.add_argument("test", choices=[*TESTS.keys(), "all"], help="Which test to run.")
+    run_p = sub.add_parser("run", help="Run a bundled k6 workflow, all workflows, or a YAML path.")
+    run_p.add_argument("selector", help="Bundled workflow name, 'all', or a workflow YAML path.")
     run_p.add_argument("--keep-going", action="store_true",
                        help="With 'all', continue subsequent tests after a failure.")
     run_p.add_argument("--collect-logs", action="store_true",
                        help="After the run, dump service logs to reports/logs/.")
+    run_p.add_argument("--confirm-output-data", action="store_true",
+                       help="Allow declared CSV output without an interactive confirmation.")
 
     sub.add_parser("clean", help="Tear down compose stack and volumes.")
 

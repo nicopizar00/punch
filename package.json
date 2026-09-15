@@ -5,7 +5,7 @@
   "scripts": {
     "build": "esbuild src/tests/smoke.ts src/tests/catalog-gate.ts src/tests/order-journey.ts src/tests/bff-checkout-journey.ts --bundle --platform=browser --target=es2015 --format=esm --external:k6 --external:'k6/*' --outdir=dist/",
     "docker:build": "docker compose build",
-    "test:smoke": "docker compose run --rm k6",
+    "test:smoke": "./bin/punch run smoke",
     "smoke:local": "command -v k6 >/dev/null 2>&1 || { echo '⚠️  k6 not found on host — install grafana/k6 or use the Docker path: ./bin/punch run smoke'; exit 127; }; echo '⚠️  HOST k6 smoke (not Docker): scoped pre-check that the k6 load test runs. Prefer <=5m. NOT the evidence/CI path — use ./bin/punch run smoke. Duration override: K6_DURATION=1m'; esbuild src/tests/smoke.ts --bundle --platform=browser --target=es2015 --format=esm --external:k6 --external:'k6/*' --outdir=dist/ && k6 run --duration \"${K6_DURATION:-30s}\" dist/smoke.js"
   },
   "devDependencies": {

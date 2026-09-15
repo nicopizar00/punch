@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p reports
-docker compose build
-docker compose run --rm k6 run /scripts/smoke.js
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo_root"
+exec ./bin/punch run smoke
