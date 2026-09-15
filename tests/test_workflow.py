@@ -87,6 +87,12 @@ class LoadWorkflowTests(unittest.TestCase):
             ("  name: csv-fixture", "  name: csv-fixture\n  name: duplicate"),
         )
 
+    def test_rejects_non_string_yaml_mapping_keys(self) -> None:
+        self.assertWorkflowError(
+            "YAML mapping keys must be strings",
+            ("    script: /scripts/csv-fixture.js", "    ? [x]\n    : value"),
+        )
+
     def test_rejects_aliases_and_anchors(self) -> None:
         self.assertWorkflowError(
             "YAML aliases and anchors are not supported",
