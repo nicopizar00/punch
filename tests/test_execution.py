@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+import io
+import os
+import shutil
+import sys
+import unittest
+import warnings
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from punch.execution import (
+    build_compose_run_command,
+    confirm_output_data,
+    execute_workflow,
+)
+from punch.workflow import load_workflow
+
+
+FAKE_DOCKER = """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+Path(os.environ["FAKE_DOCKER_ARGS"]).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+for line in os.environ.get("FAKE_STDOUT", "").split("|"):
+    if line:
+        print(line, flush=True)
+for line in os.environ.get("FAKE_STDERR", "").split("|"):
+    if line:
+        print(line, file=sys.stderr, flush=True)
+raise SystemExit(int(os.environ.get("FAKE_EXIT_CODE", "0")))
+"""
+
+
+class TtyInput(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class ExecutionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name).resolve()
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        shutil.copy(fixtures / "docker-compose.yml", self.root / "docker-compose.yml")
+        shutil.copy(fixtures / "csv-output.yaml", self.root / "csv-output.yaml")
+        self.workflow = load_workflow(self.root / "csv-output.yaml")
+
+        no_csv = (self.root / "csv-output.yaml").read_text(encoding="utf-8").replace(
+            "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n", ""
+        )
+        (self.root / "no-csv.yaml").write_text(no_csv, encoding="utf-8")
+        self.no_csv_workflow = load_workflow(self.root / "no-csv.yaml")
+
+        self.bin_path = self.root / "bin"
+        self.bin_path.mkdir()
+        docker = self.bin_path / "docker"
+        docker.write_text(FAKE_DOCKER, encoding="utf-8")
+        docker.chmod(0o755)
+
+        self.args_path = self.root / "docker-args.txt"
+        self.log_path = self.root / "run.log"
+        self.env = {
+            **os.environ,
+            "PATH": f"{self.bin_path}{os.pathsep}{os.environ['PATH']}",
+            "BASE_URL": "http://target",
+            "RUN_ID": "run-7",
+            "FAKE_DOCKER_ARGS": str(self.args_path),
+        }
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_builds_one_explicit_compose_run_with_allowlisted_environment(self) -> None:
+        command = build_compose_run_command(
+            self.workflow,
+            {"BASE_URL": "http://target", "RUN_ID": "run-7", "SECRET": "ignored"},
+        )
+        self.assertEqual(command.count("run"), 2)
+        self.assertEqual(command[:4], ["docker", "compose", "--project-directory", str(self.root)])
+        self.assertIn("BASE_URL=http://target", command)
+        self.assertIn("RUN_ID=run-7", command)
+        self.assertNotIn("SECRET=ignored", command)
+        self.assertEqual(command[-3:], ["k6", "run", "/scripts/csv-output.js"])
+
+    def test_missing_required_environment_fails_before_subprocess(self) -> None:
+        result = execute_workflow(self.workflow, environment={}, output_data_confirmed=True)
+        self.assertFalse(result.passed)
+        self.assertIn("RUN_ID", result.failure)
+        self.assertFalse(self.args_path.exists())
+
+    def test_csv_workflow_requires_confirmation_before_subprocess(self) -> None:
+        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=False)
+        self.assertFalse(result.passed)
+        self.assertIn("confirmation", result.failure)
+        self.assertFalse(self.args_path.exists())
+
+    def test_interactive_confirmation_names_every_csv_destination(self) -> None:
+        output = io.StringIO()
+        accepted = confirm_output_data(
+            [self.workflow], assume_yes=False, stdin=TtyInput("yes\n"), stdout=output
+        )
+        self.assertTrue(accepted)
+        self.assertIn("csv-fixture", output.getvalue())
+        self.assertIn("fixture.csv", output.getvalue())
+
+    def test_noninteractive_confirmation_requires_explicit_flag(self) -> None:
+        self.assertFalse(
+            confirm_output_data(
+                [self.workflow], assume_yes=False, stdin=io.StringIO("yes\n"), stdout=io.StringIO()
+            )
+        )
+        self.assertTrue(
+            confirm_output_data(
+                [self.workflow], assume_yes=True, stdin=io.StringIO(), stdout=io.StringIO()
+            )
+        )
+
+    def test_harvests_only_stdout_tagged_records_and_publishes_atomically(self) -> None:
+        self.env["FAKE_STDOUT"] = 'ordinary|[CSV] id,name|[CSV] 7,"coffee, dark"'
+        self.env["FAKE_STDERR"] = "[CSV] 99,stderr-must-not-be-data"
+        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+        self.assertTrue(result.passed)
+        self.assertEqual(result.csv_record_count, 2)
+        self.assertEqual(
+            self.workflow.csv_output.path.read_text(encoding="utf-8"), 'id,name\n7,"coffee, dark"\n'
+        )
+
+    def test_declared_csv_with_zero_tagged_lines_fails(self) -> None:
+        self.env["FAKE_STDOUT"] = "ordinary k6 output"
+        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+        self.assertFalse(result.passed)
+        self.assertIn("no [CSV] stdout records", result.failure)
+        self.assertFalse(self.workflow.csv_output.path.exists())
+
+    def test_blank_or_invalid_tagged_payload_fails_without_replacing_old_csv(self) -> None:
+        self.workflow.csv_output.path.parent.mkdir(parents=True)
+        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
+        self.env["FAKE_STDOUT"] = "[CSV]"
+        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+        self.assertFalse(result.passed)
+        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+
+    def test_nonzero_child_exit_is_propagated_and_partial_csv_is_not_published(self) -> None:
+        self.env.update(FAKE_STDOUT="[CSV] id,name|[CSV] 1,espresso", FAKE_EXIT_CODE="17")
+        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+        self.assertEqual(result.child_exit_code, 17)
+        self.assertFalse(result.passed)
+        self.assertFalse(self.workflow.csv_output.path.exists())
+
+    def test_workflow_without_csv_never_prompts_or_harvests(self) -> None:
+        result = execute_workflow(self.no_csv_workflow, environment=self.env, output_data_confirmed=False)
+        self.assertTrue(result.passed)
+        self.assertIsNone(result.csv_path)
+
+    def test_closes_child_streams_after_streaming(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            result = execute_workflow(
+                self.no_csv_workflow, environment=self.env, output_data_confirmed=False
+            )
+        self.assertTrue(result.passed)
+        self.assertEqual(
+            [warning for warning in caught if issubclass(warning.category, ResourceWarning)], []
+        )
+
+    def test_streams_stdout_and_stderr_separately_and_logs_both(self) -> None:
+        self.env.update(FAKE_STDOUT="stdout-line", FAKE_STDERR="stderr-line")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        result = execute_workflow(
+            self.no_csv_workflow,
+            environment=self.env,
+            output_data_confirmed=False,
+            stdout=stdout,
+            stderr=stderr,
+            log_path=self.log_path,
+        )
+        self.assertTrue(result.passed)
+        self.assertIn("stdout-line", stdout.getvalue())
+        self.assertNotIn("stderr-line", stdout.getvalue())
+        self.assertIn("stderr-line", stderr.getvalue())
+        self.assertIn("stdout-line", self.log_path.read_text(encoding="utf-8"))
+        self.assertIn("stderr-line", self.log_path.read_text(encoding="utf-8"))
+
+    def test_spawn_error_returns_failure_without_csv(self) -> None:
+        self.env["PATH"] = str(self.root / "missing-bin")
+        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+        self.assertFalse(result.passed)
+        self.assertIsNone(result.child_exit_code)
+        self.assertIn("could not start Docker Compose", result.failure)
+        self.assertFalse(self.workflow.csv_output.path.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

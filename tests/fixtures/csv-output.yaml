@@ -1,0 +1,17 @@
+apiVersion: punch/v1
+kind: K6Workflow
+metadata:
+  name: csv-fixture
+spec:
+  workingDirectory: .
+  compose:
+    file: docker-compose.yml
+    service: k6
+  k6:
+    script: /scripts/csv-output.js
+  environment:
+    forward: [BASE_URL, RUN_ID]
+    required: [RUN_ID]
+  outputs:
+    csv:
+      path: reports/data/fixture.csv
