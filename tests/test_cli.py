@@ -28,6 +28,9 @@ sequence_path = Path(os.environ["FAKE_DOCKER_EXIT_SEQUENCE"])
 sequence = json.loads(sequence_path.read_text(encoding="utf-8"))
 exit_code = sequence.pop(0) if sequence else 0
 sequence_path.write_text(json.dumps(sequence), encoding="utf-8")
+for line in os.environ.get("FAKE_DOCKER_STDOUT", "").split("|"):
+    if line:
+        print(line, flush=True)
 raise SystemExit(exit_code)
 """
 
@@ -120,13 +123,56 @@ class CliTests(unittest.TestCase):
         rc = main(["run", str(self.csv_workflow_path)])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
+        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
+        result = record["results"][0]
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["exitCode"], 1)
+        self.assertEqual(result["workflow"], "csv-workflow.yaml")
+        self.assertEqual(result["csvPath"], "reports/data/fixture.csv")
+        self.assertIn("confirmation", result["failure"])
 
     def test_confirm_output_data_allows_noninteractive_csv_run(self) -> None:
+        os.environ["FAKE_DOCKER_STDOUT"] = "[CSV] id,name|[CSV] 1,espresso"
         rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.compose_run_count(), 1)
+        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
+        result = record["results"][0]
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["csvRecordCount"], 2)
+        self.assertEqual(result["csvPath"], "reports/data/fixture.csv")
+        self.assertEqual(
+            (self.root / "reports/data/fixture.csv").read_text(encoding="utf-8"),
+            "id,name\n1,espresso\n",
+        )
+
+    def test_csv_without_tagged_records_fails_with_punch_exit_code(self) -> None:
+        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
+        self.assertEqual(rc, 1)
+        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
+        result = record["results"][0]
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["exitCode"], 1)
+        self.assertIn("no [CSV] stdout records", result["failure"])
+        self.assertFalse((self.root / "reports/data/fixture.csv").exists())
+
+    def test_invalid_csv_fails_with_punch_exit_code(self) -> None:
+        os.environ["FAKE_DOCKER_STDOUT"] = '[CSV] "unterminated'
+        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
+        self.assertEqual(rc, 1)
+        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
+        result = record["results"][0]
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["exitCode"], 1)
+        self.assertIn("invalid CSV output", result["failure"])
 
     def test_direct_external_workflow_requires_target_before_run(self) -> None:
+        rc = main(["run", "bff-checkout-journey"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+
+    def test_direct_external_workflow_rejects_an_empty_target_before_run(self) -> None:
+        os.environ["TARGET_BASE_URL"] = ""
         rc = main(["run", "bff-checkout-journey"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)

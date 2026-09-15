@@ -176,16 +176,17 @@ def _load_selected_workflows(selector: str):
     return workflows
 
 
+def _effective_exit_code(result) -> int:
+    if result.passed:
+        return result.child_exit_code or 0
+    return result.child_exit_code or 1
+
+
 def _evidence_result(workflow, result, *, skipped: bool = False) -> dict:
-    effective_exit_code = (
-        result.child_exit_code
-        if result.child_exit_code is not None
-        else (0 if result.passed else 1)
-    )
     return {
         "test": workflow.name,
         "workflow": str(workflow.source_path.relative_to(workflow.working_directory)),
-        "exitCode": effective_exit_code,
+        "exitCode": _effective_exit_code(result),
         "passed": result.passed,
         "failure": result.failure,
         "csvPath": (
@@ -213,7 +214,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     results: list[dict] = []
     runnable = []
     for workflow in workflows:
-        missing = [name for name in workflow.required_environment if name not in os.environ]
+        missing = [name for name in workflow.required_environment if not os.environ.get(name)]
         if args.selector == "all" and missing:
             failure = f"missing required environment: {', '.join(missing)}"
             print(f"[punch] SKIP {workflow.name}: {failure}", flush=True)
@@ -229,6 +230,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         runnable, assume_yes=args.confirm_output_data, stdin=sys.stdin, stdout=sys.stdout
     ):
         print("[punch] CSV output requires --confirm-output-data in noninteractive mode", file=sys.stderr)
+        for workflow in runnable:
+            if workflow.csv_output is not None:
+                results.append(_evidence_result(
+                    workflow,
+                    ExecutionResult(
+                        workflow.name,
+                        (),
+                        None,
+                        False,
+                        "CSV output requires confirmation",
+                        workflow.csv_output.path,
+                        0,
+                    ),
+                ))
         _write_evidence({
             "command": "run", "tests": [workflow.name for workflow in workflows], "results": results,
             "exitCode": 1, "passed": False, "startedAt": started,
@@ -245,7 +260,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             log_path=LOGS_DIR / f"k6-{workflow.name}.log",
         )
         results.append(_evidence_result(workflow, result))
-        effective_exit_code = result.child_exit_code if result.child_exit_code is not None else 1
+        effective_exit_code = _effective_exit_code(result)
         if not result.passed and overall_rc == 0:
             overall_rc = effective_exit_code
         if not result.passed and not args.keep_going:

@@ -126,7 +126,7 @@ def execute_workflow(
 ) -> ExecutionResult:
     command = build_compose_run_command(workflow, environment)
     csv_path = workflow.csv_output.path if workflow.csv_output is not None else None
-    missing = [name for name in workflow.required_environment if name not in environment]
+    missing = [name for name in workflow.required_environment if not environment.get(name)]
     if missing:
         return _result(
             workflow,
