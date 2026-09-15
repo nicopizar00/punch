@@ -188,6 +188,7 @@ def _evidence_result(workflow, result, *, skipped: bool = False) -> dict:
         "test": workflow.name,
         "workflow": str(workflow.source_path.relative_to(workflow.working_directory)),
         "exitCode": _effective_exit_code(result),
+        "childExitCode": result.child_exit_code,
         "passed": result.passed,
         "failure": result.failure,
         "csvPath": (
@@ -200,10 +201,9 @@ def _evidence_result(workflow, result, *, skipped: bool = False) -> dict:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from punch.execution import ExecutionResult, confirm_output_data, execute_workflow
+    from punch.execution import ExecutionResult, confirm_output_data, execute_workflow, paths_collide
     from punch.workflow import WorkflowError
 
-    _ensure_dirs()
     started = datetime.now(timezone.utc).isoformat()
     t0 = time.monotonic()
     try:
@@ -226,6 +226,23 @@ def cmd_run(args: argparse.Namespace) -> int:
             ))
             continue
         runnable.append(workflow)
+
+    for workflow in runnable:
+        if workflow.csv_output is None:
+            continue
+        protected_paths = (
+            STATE_DIR / "punch-run.json",
+            LOGS_DIR / f"k6-{workflow.name}.log",
+        )
+        if any(paths_collide(workflow.csv_output.path, path) for path in protected_paths):
+            print(
+                f"[punch] CSV output collides with a Punch artifact: {workflow.csv_output.path}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
+
+    _ensure_dirs()
 
     if not confirm_output_data(
         runnable, assume_yes=args.confirm_output_data, stdin=sys.stdin, stdout=sys.stdout

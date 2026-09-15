@@ -8,6 +8,7 @@ import unittest
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -38,6 +39,31 @@ raise SystemExit(int(os.environ.get("FAKE_EXIT_CODE", "0")))
 class TtyInput(io.StringIO):
     def isatty(self) -> bool:
         return True
+
+
+class ExplodingStream:
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = lines
+        self.closed = False
+
+    def __iter__(self):
+        yield from self.lines
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeProcess:
+    def __init__(self, stdout: ExplodingStream, stderr: io.StringIO, exit_code: int = 0) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
+        self.wait_called = False
+
+    def wait(self) -> int:
+        self.wait_called = True
+        return self.exit_code
 
 
 class ExecutionTests(unittest.TestCase):
@@ -150,11 +176,12 @@ class ExecutionTests(unittest.TestCase):
     def test_malformed_tagged_payload_fails_without_replacing_old_csv(self) -> None:
         self.workflow.csv_output.path.parent.mkdir(parents=True)
         self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
-        self.env["FAKE_STDOUT"] = '[CSV] "unterminated'
+        self.env["FAKE_STDOUT"] = '[CSV] id,name|[CSV] "unterminated'
         result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
         self.assertFalse(result.passed)
         self.assertIn("invalid CSV output", result.failure)
         self.assertEqual(result.csv_path, self.workflow.csv_output.path)
+        self.assertEqual(result.csv_record_count, 1)
         self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
 
     def test_nonzero_child_exit_is_propagated_and_partial_csv_is_not_published(self) -> None:
@@ -165,7 +192,74 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.child_exit_code, 17)
         self.assertFalse(result.passed)
         self.assertEqual(result.csv_path, self.workflow.csv_output.path)
+        self.assertEqual(result.csv_record_count, 2)
         self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+
+    def test_csv_log_aliases_fail_before_writes_and_preserve_destination(self) -> None:
+        csv_path = self.workflow.csv_output.path
+        csv_path.parent.mkdir(parents=True)
+        aliases: list[tuple[str, Path]] = [
+            ("lexical", csv_path.parent / "nested" / ".." / csv_path.name),
+        ]
+        csv_path.write_text("previous\n", encoding="utf-8")
+        symlink = self.root / "csv-log-symlink"
+        symlink.symlink_to(csv_path)
+        aliases.append(("symlink", symlink))
+        hardlink = self.root / "csv-log-hardlink"
+        os.link(csv_path, hardlink)
+        aliases.append(("hardlink", hardlink))
+
+        for alias_name, log_path in aliases:
+            with self.subTest(alias=alias_name):
+                self.args_path.unlink(missing_ok=True)
+                csv_path.write_text("previous\n", encoding="utf-8")
+                result = execute_workflow(
+                    self.workflow,
+                    environment=self.env,
+                    output_data_confirmed=True,
+                    log_path=log_path,
+                )
+                self.assertFalse(result.passed)
+                self.assertIn("collides", result.failure)
+                self.assertEqual(result.csv_path, csv_path)
+                self.assertEqual(csv_path.read_text(encoding="utf-8"), "previous\n")
+                self.assertFalse(self.args_path.exists())
+
+    def test_csv_log_collision_preserves_destination_when_start_would_fail(self) -> None:
+        csv_path = self.workflow.csv_output.path
+        csv_path.parent.mkdir(parents=True)
+        csv_path.write_text("previous\n", encoding="utf-8")
+
+        with patch("punch.execution.subprocess.Popen", side_effect=OSError("not available")):
+            result = execute_workflow(
+                self.workflow,
+                environment=self.env,
+                output_data_confirmed=True,
+                log_path=csv_path,
+            )
+
+        self.assertFalse(result.passed)
+        self.assertIn("collides", result.failure)
+        self.assertEqual(csv_path.read_text(encoding="utf-8"), "previous\n")
+
+    def test_reader_error_after_csv_record_fails_without_publishing(self) -> None:
+        self.workflow.csv_output.path.parent.mkdir(parents=True)
+        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
+        stdout = ExplodingStream(["[CSV] id,name\n"])
+        stderr = io.StringIO()
+        process = FakeProcess(stdout, stderr)
+        with patch("punch.execution.subprocess.Popen", return_value=process):
+            result = execute_workflow(
+                self.workflow, environment=self.env, output_data_confirmed=True
+            )
+        self.assertFalse(result.passed)
+        self.assertIn("could not read stdout", result.failure)
+        self.assertEqual(result.child_exit_code, 0)
+        self.assertEqual(result.csv_record_count, 1)
+        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        self.assertTrue(process.wait_called)
+        self.assertTrue(stdout.closed)
+        self.assertTrue(stderr.closed)
 
     def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
         self.env.pop("BASE_URL")

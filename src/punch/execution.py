@@ -105,10 +105,26 @@ def _result(
     )
 
 
-def _read_stream(stream_name: str, stream: IO[str], lines: queue.Queue[tuple[str, str | None]]) -> None:
+def paths_collide(left: Path, right: Path) -> bool:
+    """Return whether two output paths resolve to the same filesystem entry."""
+    try:
+        if left.resolve(strict=False) == right.resolve(strict=False):
+            return True
+        return left.exists() and right.exists() and os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _read_stream(
+    stream_name: str,
+    stream: IO[str],
+    lines: queue.Queue[tuple[str, str | Exception | None]],
+) -> None:
     try:
         for line in stream:
             lines.put((stream_name, line))
+    except Exception as error:
+        lines.put((stream_name, error))
     finally:
         lines.put((stream_name, None))
 
@@ -141,6 +157,15 @@ def execute_workflow(
             child_exit_code=None,
             passed=False,
             failure="CSV output requires confirmation",
+            csv_path=csv_path,
+        )
+    if csv_path is not None and log_path is not None and paths_collide(csv_path, log_path):
+        return _result(
+            workflow,
+            command,
+            child_exit_code=None,
+            passed=False,
+            failure="CSV output collides with log path",
             csv_path=csv_path,
         )
 
@@ -187,7 +212,7 @@ def execute_workflow(
 
         assert proc.stdout is not None
         assert proc.stderr is not None
-        lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        lines: queue.Queue[tuple[str, str | Exception | None]] = queue.Queue()
         readers = [
             threading.Thread(target=_read_stream, args=("stdout", proc.stdout, lines), daemon=True),
             threading.Thread(target=_read_stream, args=("stderr", proc.stderr, lines), daemon=True),
@@ -197,11 +222,16 @@ def execute_workflow(
 
         completed_streams = 0
         csv_error: str | None = None
+        reader_error: str | None = None
         csv_record_count = 0
         while completed_streams < len(readers):
             stream_name, line = lines.get()
             if line is None:
                 completed_streams += 1
+                continue
+            if isinstance(line, Exception):
+                if reader_error is None:
+                    reader_error = f"could not read {stream_name}: {line}"
                 continue
 
             destination = output if stream_name == "stdout" else errors
@@ -239,6 +269,17 @@ def execute_workflow(
                 passed=False,
                 failure=f"Docker Compose exited with code {child_exit_code}",
                 csv_path=csv_path,
+                csv_record_count=csv_record_count,
+            )
+        if reader_error is not None:
+            return _result(
+                workflow,
+                command,
+                child_exit_code=child_exit_code,
+                passed=False,
+                failure=reader_error,
+                csv_path=csv_path,
+                csv_record_count=csv_record_count,
             )
         if csv_error is not None:
             return _result(
@@ -248,6 +289,7 @@ def execute_workflow(
                 passed=False,
                 failure=f"invalid CSV output: {csv_error}",
                 csv_path=csv_path,
+                csv_record_count=csv_record_count,
             )
         if csv_path is not None and csv_record_count == 0:
             return _result(
@@ -257,6 +299,7 @@ def execute_workflow(
                 passed=False,
                 failure="no [CSV] stdout records were produced",
                 csv_path=csv_path,
+                csv_record_count=csv_record_count,
             )
         if csv_path is not None:
             assert temp_path is not None
