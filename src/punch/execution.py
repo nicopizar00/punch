@@ -125,6 +125,7 @@ def execute_workflow(
     log_path: Path | None = None,
 ) -> ExecutionResult:
     command = build_compose_run_command(workflow, environment)
+    csv_path = workflow.csv_output.path if workflow.csv_output is not None else None
     missing = [name for name in workflow.required_environment if name not in environment]
     if missing:
         return _result(
@@ -133,6 +134,7 @@ def execute_workflow(
             child_exit_code=None,
             passed=False,
             failure=f"missing required environment: {', '.join(missing)}",
+            csv_path=csv_path,
         )
     if workflow.csv_output is not None and not output_data_confirmed:
         return _result(
@@ -141,11 +143,11 @@ def execute_workflow(
             child_exit_code=None,
             passed=False,
             failure="CSV output requires confirmation",
+            csv_path=csv_path,
         )
 
     output = stdout if stdout is not None else sys.stdout
     errors = stderr if stderr is not None else sys.stderr
-    csv_path = workflow.csv_output.path if workflow.csv_output is not None else None
     temp_path: Path | None = None
     csv_file: IO[str] | None = None
     log_file: IO[str] | None = None
@@ -182,6 +184,7 @@ def execute_workflow(
                 child_exit_code=None,
                 passed=False,
                 failure=f"could not start Docker Compose: {error}",
+                csv_path=csv_path,
             )
 
         assert proc.stdout is not None
@@ -237,6 +240,7 @@ def execute_workflow(
                 child_exit_code=child_exit_code,
                 passed=False,
                 failure=f"Docker Compose exited with code {child_exit_code}",
+                csv_path=csv_path,
             )
         if csv_error is not None:
             return _result(
@@ -245,6 +249,7 @@ def execute_workflow(
                 child_exit_code=child_exit_code,
                 passed=False,
                 failure=f"invalid CSV output: {csv_error}",
+                csv_path=csv_path,
             )
         if csv_path is not None and csv_record_count == 0:
             return _result(
@@ -253,6 +258,7 @@ def execute_workflow(
                 child_exit_code=child_exit_code,
                 passed=False,
                 failure="no [CSV] stdout records were produced",
+                csv_path=csv_path,
             )
         if csv_path is not None:
             assert temp_path is not None

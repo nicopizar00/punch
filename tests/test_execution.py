@@ -90,12 +90,14 @@ class ExecutionTests(unittest.TestCase):
         result = execute_workflow(self.workflow, environment={}, output_data_confirmed=True)
         self.assertFalse(result.passed)
         self.assertIn("RUN_ID", result.failure)
+        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
         self.assertFalse(self.args_path.exists())
 
     def test_csv_workflow_requires_confirmation_before_subprocess(self) -> None:
         result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=False)
         self.assertFalse(result.passed)
         self.assertIn("confirmation", result.failure)
+        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
         self.assertFalse(self.args_path.exists())
 
     def test_interactive_confirmation_names_every_csv_destination(self) -> None:
@@ -130,26 +132,49 @@ class ExecutionTests(unittest.TestCase):
         )
 
     def test_declared_csv_with_zero_tagged_lines_fails(self) -> None:
+        self.workflow.csv_output.path.parent.mkdir(parents=True)
+        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
         self.env["FAKE_STDOUT"] = "ordinary k6 output"
         result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
         self.assertFalse(result.passed)
         self.assertIn("no [CSV] stdout records", result.failure)
-        self.assertFalse(self.workflow.csv_output.path.exists())
+        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
+        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
 
-    def test_blank_or_invalid_tagged_payload_fails_without_replacing_old_csv(self) -> None:
+    def test_malformed_tagged_payload_fails_without_replacing_old_csv(self) -> None:
         self.workflow.csv_output.path.parent.mkdir(parents=True)
         self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
-        self.env["FAKE_STDOUT"] = "[CSV]"
+        self.env["FAKE_STDOUT"] = '[CSV] "unterminated'
         result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
         self.assertFalse(result.passed)
+        self.assertIn("invalid CSV output", result.failure)
+        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
         self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
 
     def test_nonzero_child_exit_is_propagated_and_partial_csv_is_not_published(self) -> None:
+        self.workflow.csv_output.path.parent.mkdir(parents=True)
+        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
         self.env.update(FAKE_STDOUT="[CSV] id,name|[CSV] 1,espresso", FAKE_EXIT_CODE="17")
         result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
         self.assertEqual(result.child_exit_code, 17)
         self.assertFalse(result.passed)
-        self.assertFalse(self.workflow.csv_output.path.exists())
+        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
+        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+
+    def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
+        self.env.pop("BASE_URL")
+        self.env["SECRET"] = "ignored"
+        result = execute_workflow(
+            self.no_csv_workflow, environment=self.env, output_data_confirmed=False
+        )
+        arguments = self.args_path.read_text(encoding="utf-8").splitlines()
+        forwarded = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-e"]
+        self.assertTrue(result.passed)
+        self.assertEqual(arguments.count("compose"), 1)
+        self.assertEqual(arguments.count("run"), 2)
+        self.assertEqual(forwarded, ["RUN_ID=run-7"])
+        self.assertNotIn("BASE_URL=http://target", arguments)
+        self.assertNotIn("SECRET=ignored", arguments)
 
     def test_workflow_without_csv_never_prompts_or_harvests(self) -> None:
         result = execute_workflow(self.no_csv_workflow, environment=self.env, output_data_confirmed=False)
@@ -187,12 +212,15 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn("stderr-line", self.log_path.read_text(encoding="utf-8"))
 
     def test_spawn_error_returns_failure_without_csv(self) -> None:
+        self.workflow.csv_output.path.parent.mkdir(parents=True)
+        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
         self.env["PATH"] = str(self.root / "missing-bin")
         result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
         self.assertFalse(result.passed)
         self.assertIsNone(result.child_exit_code)
         self.assertIn("could not start Docker Compose", result.failure)
-        self.assertFalse(self.workflow.csv_output.path.exists())
+        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
+        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
 
 
 if __name__ == "__main__":
