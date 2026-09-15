@@ -9,8 +9,8 @@ Rules apply **every** Copilot session this repo. Deliberately short. Detail in
 Violate = break reproducibility, safety, or trust. Stop and ask
 before bending.
 
-1. **Docker First execution** — Docker is the only host requirement (plus stdlib Python 3). Never propose host-side `npm`, `k6`, or `pip` commands, **except** the narrow `punch-builder` performance-test-subsystem authoring exception — host `npm`/`pnpm`/esbuild/lint, and host `k6` only for the `npm run smoke:local` pre-check, while authoring the k6 TS toolchain; off the evidence path, shipped chain unchanged ([ADR 0001](../docs/ai/decisions/0001-perf-engineer-host-npm.md)). Always-on contract: [`punch-architecture.instructions.md`](instructions/punch-architecture.instructions.md).
-2. **Python orchestration façade** — `bin/punch` stdlib-only Python (same source as #1). No host-side Node, npm, k6, or pip-installed package for the orchestrator itself — the sole exception is Rule 1's scoped `punch-builder` performance-test-subsystem authoring carve-out, not a general allowance.
+1. **Docker First execution** — Docker, Python 3.10+, and the pinned `requirements.txt` are host prerequisites. Run `python3 -m pip install -r requirements.txt` explicitly; never install dependencies from `punch run`. Never propose host-side `npm` or `k6`, **except** the narrow `punch-builder` performance-test-subsystem authoring exception — host `npm`/`pnpm`/esbuild/lint, and host `k6` only for the `npm run smoke:local` pre-check, while authoring the k6 TS toolchain; off the evidence path, shipped chain unchanged ([ADR 0001](../docs/ai/decisions/0001-perf-engineer-host-npm.md)). Always-on contract: [`punch-architecture.instructions.md`](instructions/punch-architecture.instructions.md).
+2. **Python orchestration façade** — `bin/punch` is Python plus pinned PyYAML; all other orchestration logic remains standard-library based. Execution definitions live in `workflows/k6/*.yaml`; `punch run` launches one Compose run per workflow and does not build images. `src/punch/execution.py` owns launch, logs, CSV confirmation, and harvesting. Interactive prompting is only for YAML-declared CSV output; CI must use `--confirm-output-data` when selecting one.
 3. **Validation evidence mandatory** — a change is not "done" until it meets its class's evidence bar. Runtime-affecting → `reports/state/punch-run.json` (`passed: true`). Documentation/Copilot-only → diff review + governance parity, no runtime run expected. Canonical evidence matrix: [`docs/workflows/validation.md`](../docs/workflows/validation.md). Artifact contract: [`artifacts-reporting.instructions.md`](instructions/artifacts-reporting.instructions.md).
 4. **Human approves Ship.** Agent Mode MUST stop after opening PR. Merge, release, push tags = human-only.
    *WHY:* irreversible + externally visible. PR boundary = where human judgment enters.
@@ -157,4 +157,3 @@ Refer to `docs/ai/operating-model.md`, `docs/ai/workflow.md`, and
 instruction fragments under `.github/instructions/`. Proposing
 changes touching multiple matrix rows → document verification plan
 in PR description.
-

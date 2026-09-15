@@ -11,8 +11,9 @@ rewrites existing files. The real, ongoing documentation reconciliation belongs
 to ``/document`` (Punch Document). The artifacts this command emits are clearly
 marked as disposable first-wave bootstrap output.
 
-Stdlib only — no pip dependencies. YAML is hand-rendered (the one machine-readable
-artifact has a fixed shape, so a tiny serializer is enough and we avoid PyYAML).
+The scanner itself uses only the standard library. YAML is hand-rendered (the one
+machine-readable artifact has a fixed shape, so a tiny serializer is enough and
+the scanner does not need the orchestrator's pinned PyYAML dependency).
 """
 
 from __future__ import annotations

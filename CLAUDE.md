@@ -22,8 +22,8 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
 - **k6** — load testing runtime (executes the bundled JS).
 - **TypeScript** — author tests with types and editor support.
 - **esbuild** — bundles TypeScript to one ES module per test file. Runs inside the Docker build stage; not required on the host.
-- **Docker / Docker Compose** — primary interface. Multi-stage build handles bundling and execution. Host requires only Docker.
-- **Python 3 (stdlib only)** — thin orchestration façade at `bin/punch` (entry point) and `src/punch/` (CLI module). No pip dependencies; uses `argparse`, `subprocess`, `pathlib`, `json`, `os`, `sys` only.
+- **Docker / Docker Compose** — primary interface. Multi-stage build handles bundling and execution.
+- **Python 3 + PyYAML 6.0.3** — thin orchestration façade at `bin/punch` (entry point) and `src/punch/` (CLI module). Docker, Python 3.10+, and pinned requirements are host prerequisites; all orchestration beyond YAML loading stays standard-library based.
 - **GitHub Actions** — builds, runs the full test suite, collects artifacts, validates artifact transfer between jobs.
 - **Postgres 16** — persistence for the orders reference service. Schema seeded via `docker/postgres/init.sql`.
 - **pg** — Postgres client used only by `orders-api`, installed inside its Docker image.
@@ -49,7 +49,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │   │   ├── browser-smoke.ts.example  # deferred k6 Browser placeholder
     │   │   └── support/
     │   │       └── report.ts             # shared HTML report builder
-    │   └── punch/                        # Python orchestrator (stdlib only)
+    │   └── punch/                        # Python + PyYAML orchestrator
     │       ├── __init__.py
     │       ├── __main__.py               # argparse CLI; streams docker compose
     │       └── init_scan.py              # `punch init` bootstrap scanner / readiness mapper
@@ -100,8 +100,8 @@ Anything not listed here needs justification before being added.
 ## Rules
 
 1. **Docker First.** Docker is the primary interface for building, running, and
-   validating the project. The host requires only Docker and a stdlib Python 3
-   runtime — no Node, no k6, no pip-installed packages.
+   validating the project. The host requires Docker, Python 3.10+, and pinned
+   Python requirements — no Node or k6.
    `npm`/bundler/`pg` invocations happen inside Docker build stages and are
    implementation details, not user-facing commands. The Python orchestrator
    is a thin façade that shells out to `docker compose`; it adds no execution
@@ -113,7 +113,8 @@ Anything not listed here needs justification before being added.
    *authoring/maintenance* convenience off the evidence path; the shipped
    chain still bundles in `docker/k6.Dockerfile`, and `smoke:local` is not the
    evidence path. It does not apply while `punch-builder` is working the
-   runtime subsystem, which stays Docker-only + stdlib Python.
+   runtime subsystem, which stays Docker-first with its explicitly installed
+   Python runtime.
 2. **Small, reviewable steps.** Each change must be understandable in one
    sitting. Prefer multiple small PRs over one large one.
 3. **No unnecessary dependencies.** Every dependency must earn its place. If
@@ -132,6 +133,7 @@ Anything not listed here needs justification before being added.
 Preferred entry point (Python orchestrator):
 
 - `./bin/punch doctor` — confirm host prerequisites.
+- `python3 -m pip install -r requirements.txt` — install the pinned host runtime before `punch run`.
 - `./bin/punch init` — one-time, non-destructive first-wave scan that maps the
   repo's Copilot assets + docs readiness for Punch adoption (Punch = template
   origin; resolves a local governance key). Dry-run by default; `--write` to
@@ -174,8 +176,12 @@ Python CLI reaches feature parity):
   `dist/`. The support module is bundled into each test, not a separate
   output. `browser-smoke.ts.example` is a deferred placeholder — do not
   build it.
-- `src/punch/` is the Python orchestrator. Stdlib only — no pip
-  dependencies, ever.
+- `src/punch/` is the Python + PyYAML orchestrator. `src/punch/execution.py`
+  owns launch, separate stdout/stderr logs, CSV confirmation, and harvesting;
+  all remaining orchestration is standard-library based. Definitions live in
+  `workflows/k6/*.yaml`; one workflow is one Compose run and `punch run` does
+  not build images. CSV prompts apply only to declared output; CI selects CSV
+  workflows with `--confirm-output-data`.
 - A change is not "done" until `reports/state/punch-run.json` records the
   Test run. See `docs/workflows/validation.md`.
 - Propose changes in small, reviewable steps. Do not implement a full feature

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Thin shim. The orchestrator is stdlib-only Python in src/punch/.
+# Thin shim. The orchestrator is Python plus the pinned PyYAML runtime in src/punch/.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"

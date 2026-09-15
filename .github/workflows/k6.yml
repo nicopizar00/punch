@@ -15,6 +15,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Punch runtime dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run Punch unit tests
+        run: PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
+
       - name: Build images
         run: docker compose build
 
@@ -57,7 +67,8 @@ jobs:
           | Smoke | smoke-report.html · smoke.json |
           | Catalog gate | catalog-gate-report.html · catalog-gate.json |
           | Order journey | order-journey-report.html · order-journey.json · state/test-context.json |
-          | Run evidence | state/punch-run.json (written by `bin/punch`) |
+          | Run evidence | state/punch-run.json — workflow, exit codes, pass/fail, failure, CSV path/count |
+          | Optional CSV data | Workflow-declared path; published only by a successful confirmed run |
           | Docker logs | logs/gateway-api.log · catalog-api.log · orders-api.log · postgres.log |
 
           Artifact: **performance-suite-reports**
@@ -119,7 +130,8 @@ jobs:
           | catalog-gate-report.html | HTML report — catalog read performance gate |
           | order-journey-report.html | HTML report — order create-read journey |
           | smoke.json / catalog-gate.json / order-journey.json | Raw k6 metrics (line-delimited) |
-          | state/punch-run.json | Canonical run evidence — tests, exit codes, `passed` boolean |
+          | state/punch-run.json | Canonical run evidence — workflow, exit codes, `passed`, `failure`, `csvPath`, `csvRecordCount` |
+          | Workflow-declared CSV | Optional ordered tag-stripped stdout records; absent from bundled workflows |
           | state/test-context.json | Journey-specific metadata written by `order-journey.ts` |
           | logs/*.log | Docker service logs for debugging |
           EOF

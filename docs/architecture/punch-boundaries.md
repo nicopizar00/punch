@@ -9,16 +9,18 @@ Most "why did this go wrong?" answers map to a boundary crossing.
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Host                  developer/CI machine                   │
-│   requires:           Docker + Python 3 (stdlib only)        │
-│   never installs:     Node, npm, k6, pip packages            │
+│   requires:           Docker + Python 3.10+ + requirements   │
+│   never installs:     Node, npm, k6 (Punch setup installs     │
+│                       pinned PyYAML explicitly)              │
 ├──────────────────────────────────────────────────────────────┤
 │ Bash wrapper          bin/punch (entrypoint), bin/test-*     │
 │   responsibility:     route the shell call to Python         │
 │   never owns:         orchestration logic                    │
 ├──────────────────────────────────────────────────────────────┤
-│ Python orchestrator   src/punch/__main__.py                  │
-│   owns:               argparse, subprocess streaming, exit   │
-│                       codes, evidence file, --help/doctor    │
+│ Python orchestrator   src/punch/__main__.py + execution.py   │
+│   owns:               argparse, workflow launch, separate    │
+│                       stdout/stderr logs, CSV confirmation,  │
+│                       harvesting, exit codes, evidence       │
 │   never owns:         Docker semantics, k6 thresholds, the   │
 │                       HTML report shape                      │
 ├──────────────────────────────────────────────────────────────┤
@@ -58,7 +60,7 @@ Most "why did this go wrong?" answers map to a boundary crossing.
 | Layer | May call layer below | Must not call layer above |
 |---|---|---|
 | Bash wrapper | Python orchestrator | — |
-| Python orchestrator | `docker compose ...` | host tools (npm, k6, pip) |
+| Python orchestrator | one `docker compose ... run --rm` per workflow | host tools (npm, k6); installs no dependencies during `run` |
 | Docker Compose | starts containers | the orchestrator |
 | Docker images | install dependencies inside themselves | other services or the orchestrator |
 | k6 test code | HTTP to compose-network hostnames | the orchestrator, compose, or Docker |
@@ -92,6 +94,10 @@ absorbs the former Define step) is designed to catch these before merge.
    the CI validation job and any downstream consumer. Fix: treat as a
    contract change — Plan must call out the cascade
    (`docs/ai/maintenance-matrix.md`).
+7. **Treating stderr as CSV data.** Only workflow-declared `[CSV]` records on
+   stdout are harvested. Fix: preserve separate streams in
+   `src/punch/execution.py`; require confirmation and publish CSV atomically
+   only after success.
 
 ## When to consult this file
 

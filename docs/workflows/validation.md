@@ -32,9 +32,8 @@ Schema (informal — produced by `src/punch/__main__.py`):
   "command": "run",
   "tests": ["smoke", "gate", "journey"],
   "results": [
-    {"test": "smoke",   "exitCode": 0, "passed": true},
-    {"test": "gate",    "exitCode": 0, "passed": true},
-    {"test": "journey", "exitCode": 0, "passed": true}
+    {"test": "smoke", "workflow": "workflows/k6/smoke.yaml", "exitCode": 0,
+     "passed": true, "failure": null, "csvPath": null, "csvRecordCount": 0}
   ],
   "exitCode": 0,
   "passed": true,
@@ -42,6 +41,32 @@ Schema (informal — produced by `src/punch/__main__.py`):
   "durationSeconds": 78.3
 }
 ```
+
+`failure`, `csvPath`, and `csvRecordCount` are per-workflow evidence fields.
+They make missing CSV confirmation, child-process failures, and published CSV
+counts auditable without treating a prior data file as proof of this run.
+
+## Host setup and workflow selection
+
+Docker, Python 3.10+, and the pinned requirements are prerequisites. Install
+and build explicitly; `punch run` does neither. Execution definitions live in
+`workflows/k6/*.yaml`, and one selected workflow produces one explicit Compose
+run.
+
+```bash
+python3 -m pip install -r requirements.txt
+docker compose build
+./bin/punch run smoke
+./bin/punch run path/to/workflow.yaml
+./bin/punch run path/to/csv-workflow.yaml --confirm-output-data
+```
+
+CSV is optional, workflow-declared, and path-configured. Its producer is
+`src/punch/execution.py`; its schema is the ordered tag-stripped `[CSV]`
+stdout records. The file is published atomically only after success. CI must
+pass `--confirm-output-data` when it selects a CSV workflow. The bundled
+workflows declare no CSV output, so the default CI command remains
+`./bin/punch run all`.
 
 In addition, each test writes its own evidence under `reports/`:
 
@@ -97,6 +122,9 @@ artifact, then a second job validates the artifact contents are present.
 
 This proves the local validation contract and the CI validation contract
 produce the same evidence.
+
+CI first runs `python -m pip install -r requirements.txt` and the direct
+Python unit suite, then builds images and invokes `./bin/punch run all`.
 
 ## What evidence is NOT
 

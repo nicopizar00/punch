@@ -8,17 +8,24 @@ Demonstrate a maintainable, end-to-end performance testing pipeline — from a m
 
 ## Quick start
 
-Requires only Docker and a stdlib Python 3 runtime (≥ 3.10). No Node, no k6,
-no pip packages on the host.
+Requires Docker, Python 3.10+, and the pinned Python requirements. No Node or
+k6 is required on the host. Install the declared runtime before running Punch;
+`punch run` never installs dependencies or builds images.
 
 ```bash
-./bin/punch doctor                  # Check host prerequisites
-./bin/punch run smoke               # Health smoke across all services
-./bin/punch run gate                # Catalog read performance gate
-./bin/punch run journey             # Order create-read journey
-./bin/punch run all --collect-logs  # Full suite + service logs
-./bin/punch clean                   # Tear down containers and volumes
+python3 -m pip install -r requirements.txt
+docker compose build
+./bin/punch run smoke
+./bin/punch run path/to/workflow.yaml
+./bin/punch run path/to/csv-workflow.yaml --confirm-output-data
 ```
+
+Each YAML definition in `workflows/k6/*.yaml` produces one explicit Compose
+run. CSV output is optional, workflow-declared, and path-configured. When
+declared, `src/punch/execution.py` collects the ordered, tag-stripped `[CSV]`
+stdout records and publishes the CSV only after a successful run. A prior CSV
+file is not evidence that the current run succeeded; inspect the current run
+evidence instead. Bundled workflows do not declare CSV output.
 
 The legacy bash scripts (`./bin/test-smoke`, `./bin/test-gate`,
 `./bin/test-journey`, `./bin/test-suite`, `./bin/build`, `./bin/clean`)
@@ -75,6 +82,10 @@ reports/
 
 GitHub Actions uploads all of these as the `performance-suite-reports` artifact. A second CI job downloads the artifact and validates that every expected file is present — demonstrating serialized state transfer between jobs without live containers.
 
+`reports/state/punch-run.json` records per-workflow `exitCode`, `passed`,
+`failure`, `csvPath`, and `csvRecordCount`, plus the overall run outcome and
+timing. This is the evidence for the current run.
+
 ## AI-assisted operating model
 
 This repo uses a linear lifecycle for AI-assisted changes — **Spec →
@@ -98,4 +109,3 @@ registries below for the live inventory.
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines, local commands, and branch/PR conventions. Small, focused PRs are preferred; run `./bin/punch run smoke` to validate basic health before opening a PR.
-

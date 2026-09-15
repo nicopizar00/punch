@@ -5,8 +5,9 @@ Thanks for wanting to contribute. Follow these lightweight rules to keep changes
 ## Getting started
 
 1. Install Docker and Python 3 (>=3.10). No Node or k6 is required on the host.
-2. Run `./bin/punch doctor` to confirm your environment.
-3. Use a feature branch named `ai-ready/*` or `feature/*`.
+2. Install the pinned Punch runtime with `python3 -m pip install -r requirements.txt`.
+3. Run `./bin/punch doctor` to confirm your environment.
+4. Use a feature branch named `ai-ready/*` or `feature/*`.
 
 ## Branch and PR rules
 
@@ -17,10 +18,19 @@ Thanks for wanting to contribute. Follow these lightweight rules to keep changes
 ## Running and testing locally
 
 ```bash
-./bin/punch run all --collect-logs  # Build and run the full suite
-./bin/punch run smoke               # Run a single test
-./bin/punch clean                   # Tear down containers and volumes
+python3 -m pip install -r requirements.txt
+docker compose build
+./bin/punch run smoke
+./bin/punch run path/to/workflow.yaml
+./bin/punch run path/to/csv-workflow.yaml --confirm-output-data
 ```
+
+`punch run` performs one Compose run for each selected YAML workflow and never
+builds images. CSV is optional, declared with a destination by the workflow,
+and published by `src/punch/execution.py` only after success. Its schema is the
+ordered tag-stripped `[CSV]` stdout records; a pre-existing CSV does not prove
+the current run passed. CI must pass `--confirm-output-data` when selecting a
+CSV workflow; bundled workflows do not declare CSV output.
 
 ## What to include in PRs
 
