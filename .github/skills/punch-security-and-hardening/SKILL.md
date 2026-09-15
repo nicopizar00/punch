@@ -18,8 +18,8 @@ XSS, CSP, and CORS do not apply**. The real surfaces are:
 - **Secrets / env** — Critical Rule #5: no secrets or private URLs in source, docs,
   tests, or artifacts; external base URLs come from env (`TARGET_BASE_URL`).
 - **External-URL handling** — what the gateway proxies to and what k6 targets.
-- **Supply chain** — `pg` (the only runtime dep, in `orders`), npm in the builder
-  stages, and Docker image pins.
+- **Supply chain** — PyYAML 6.0.3 (pinned host runtime), `pg` (inside
+  `orders`), npm in the builder stages, and Docker image pins.
 
 ## Threat Model First
 
@@ -95,12 +95,15 @@ compromised the moment it reaches a remote.
 
 ## Supply-Chain Hygiene
 
-- **`pg`** is the only runtime dependency (inside the `orders` image) — keep it
-  pinned and reviewed; npm in the builder stages (esbuild/TS) installs with the
-  committed lockfile (`npm ci`, not `npm install`) for reproducible builds.
+- **PyYAML 6.0.3** is the pinned host runtime dependency; install it from
+  `requirements.txt` explicitly and review any change. **`pg`** remains the
+  runtime dependency inside the `orders` image; npm in builder stages
+  (esbuild/TS) installs with the committed lockfile (`npm ci`, not
+  `npm install`) for reproducible builds.
 - **Pin Docker image tags** (e.g. `grafana/k6:0.55.0`, `postgres:16`) — no `latest`.
 - **Review new dependencies** before adding (maintenance, downloads, `postinstall`
-  scripts, typosquats). The host installs nothing (no pip) — keep it that way.
+  scripts, typosquats). The host installs only pinned requirements explicitly;
+  `punch run` never installs dependencies.
 
 ## Common Rationalizations
 

@@ -139,9 +139,11 @@ during Review. Skill axes detailed in
 - Orchestrator is Python plus pinned PyYAML 6.0.3; all other orchestration
   remains standard-library based. Agents make dependency installation an
   explicit host setup step and never trigger it from `punch run`.
-- Execution definitions live in `workflows/k6/*.yaml`. `src/punch/execution.py`
-  owns one Compose launch per workflow, separate stdout/stderr logs, CSV
-  confirmation, and data harvesting; `punch run` does not build images.
+- Consumer repositories own workflow YAML and k6 scripts. Punch owns the
+  reusable `src/punch/` engine; this repository's `workflows/k6/*.yaml` files
+  are bundled fixtures/examples. `src/punch/execution.py` owns one Compose
+  launch per workflow, separate stdout/stderr logs, CSV confirmation, and data
+  harvesting; `punch run` does not build images.
 - Execution chain **strictly linear**: TS → bundle (in Docker) →
   k6 image → run → reports. Do not branch it.
 - CI/CD is **external** to Punch. Punch provides reusable local/CI-compatible

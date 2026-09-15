@@ -11,12 +11,12 @@ Describe the change and why it is needed.
 
 Per the [evidence matrix](../docs/workflows/validation.md):
 
-- **Runtime-affecting change** — commands to run locally: `./bin/punch run smoke`. Files to check: reports/* and reports/state/punch-run.json (`passed: true` gates the change).
+- **Runtime-affecting change** — install the pinned PyYAML runtime with `python3 -m pip install -r requirements.txt`, then run `./bin/punch run smoke`. Files to check: reports/* and reports/state/punch-run.json (`passed: true` gates the change).
 - **Documentation/Copilot-only change** — no runtime run expected; verify via diff review + a clean `punch-ai-governance` pass.
 
 ## Checklist
 
-- [ ] Runtime-affecting: ran `./bin/punch run smoke` inside Docker (no host `npm`/`k6`/`pip` required), artifacts produced in `reports/`, `reports/state/punch-run.json` shows `passed: true` — **or** Documentation/Copilot-only: no Build step needed, `punch-ai-governance` ran clean
+- [ ] Runtime-affecting: explicitly installed pinned PyYAML requirements, ran `./bin/punch run smoke` through Docker Compose (no host `npm`/`k6` required), artifacts produced in `reports/`, `reports/state/punch-run.json` shows `passed: true` — **or** Documentation/Copilot-only: no Build step needed, `punch-ai-governance` ran clean
 - [ ] If `src/tests/` changed: dist bundles and CI steps updated
 - [ ] If schema or DB changed: migration/seed steps included
 - [ ] Docs updated (README / CHANGELOG.md) when behavior or public interfaces change

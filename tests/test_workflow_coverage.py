@@ -27,6 +27,7 @@ class WorkflowCoverageTests(unittest.TestCase):
 
         self.assertEqual(Counter(workflow_scripts), Counter(built_scripts))
         self.assertEqual(len([workflow.name for workflow in workflows]), len({workflow.name for workflow in workflows}))
+        self.assertTrue(all(workflow.csv_output is None for workflow in workflows))
 
 
 if __name__ == "__main__":

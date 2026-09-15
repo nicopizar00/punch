@@ -1,8 +1,9 @@
 """punch CLI entry point.
 
-Stdlib-only orchestrator. Owns control flow; delegates execution to
-docker compose. Writes a single evidence file at reports/state/punch-run.json
-so automation can confirm a run happened without parsing k6 output.
+Python orchestration with pinned PyYAML for workflow loading. Owns control
+flow; delegates execution to Docker Compose. Writes a single evidence file at
+reports/state/punch-run.json so automation can confirm a run happened without
+parsing k6 output. Install the pinned requirements before invoking Punch.
 """
 
 from __future__ import annotations

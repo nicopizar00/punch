@@ -74,8 +74,10 @@ the split exists to keep each layer's diff reviewable.
 - k6 HTTP and Browser stay separated unless the spec requires integration.
 - Runtime evidence beats expected behavior; full logs preserved as artifacts.
 - Exit codes reflect the failed command; local stays CI-portable.
-- Docker First, stdlib-only Python — except the documented host-`npm`
-  exception for the performance-test subsystem
+- Docker First, Python plus pinned PyYAML (all other orchestration remains
+  standard-library based). Install `requirements.txt` explicitly; `punch run`
+  never installs dependencies. The documented host-`npm`
+  exception for the performance-test subsystem remains
   ([ADR 0001](../../docs/ai/decisions/0001-perf-engineer-host-npm.md)): host
   `npm`/`pnpm`/esbuild/lint, and host `k6` only for the `npm run smoke:local`
   pre-check, scoped to `package.json`, `tsconfig.json`, esbuild/lint config,
@@ -85,9 +87,10 @@ the split exists to keep each layer's diff reviewable.
 
 - Read any file for context; edit only the active subsystem's **allowed**
   paths.
-- Runtime subsystem: stdlib-only Python (argparse, subprocess, pathlib, json)
-  — no pip dependencies. Stream subprocess output with low console noise;
-  write full logs + machine state to `reports/**`. Exit codes mirror the
+- Runtime subsystem: Python plus pinned PyYAML for workflow loading; all other
+  orchestration uses `argparse`, `subprocess`, `pathlib`, and `json`. Stream
+  subprocess output with low console noise; write full logs + machine state to
+  `reports/**`. Exit codes mirror the
   underlying failed command. Compose: stable service names, healthcheck
   gating, env contracts, pinned images. No business logic hidden in Bash or
   Compose. No host `k6`/`docker run` bypass of Compose.

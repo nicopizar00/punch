@@ -28,9 +28,10 @@ Scope: `docker-compose.yml` and all under `docker/`. Compose own runtime boundar
   compose, never `ARG`s that hardcode credentials.
 - **Volumes are read-only by default.** Only `./reports:/reports`
   writable. Mounts needing write access must justify in Plan.
-- **No hidden host dependencies.** Fresh clone with only Docker
-  installed must run full suite via `./bin/punch`. Change needing
-  host-side tool goes in `bin/punch doctor`.
+- **Explicit host prerequisites.** A fresh clone requires Docker, Python
+  3.10+, and the pinned PyYAML requirements. Run
+  `python3 -m pip install -r requirements.txt` before `./bin/punch`; do not
+  add host Node or k6 requirements. `punch run` never installs dependencies.
 - **Local reproducibility.** Compose run must be deterministic enough
   that two contributors get same artifact set from same commit.
 

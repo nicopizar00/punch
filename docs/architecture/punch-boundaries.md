@@ -55,6 +55,15 @@ Most "why did this go wrong?" answers map to a boundary crossing.
 └──────────────────────────────────────────────────────────────┘
 ```
 
+## Reusable engine and consumer workloads
+
+Consumer repositories own workflow YAML and k6 scripts. Punch owns the
+reusable `src/punch/` engine, including normalized YAML loading, workflow
+launch, separate stream handling, CSV harvesting, and evidence. This
+repository's `workflows/k6/*.yaml` and k6 files are bundled fixtures/examples;
+they demonstrate the engine and do not make Punch the owner of a consumer's
+workload definitions.
+
 ## What each layer can do to the layer above and below
 
 | Layer | May call layer below | Must not call layer above |

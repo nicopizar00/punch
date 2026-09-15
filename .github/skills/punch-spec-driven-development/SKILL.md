@@ -12,8 +12,10 @@ This is the **method** the [`punch-spec`](../../prompts/punch-spec.prompt.md) pr
 activates (agent `punch-architect`). Where the generic examples below
 conflict with Punch, **Punch wins**:
 
-- **Stack:** Docker-first, Python stdlib orchestrator, k6 tests — never host
-  `npm`/`k6`/`pip`. See [`punch-architecture.instructions.md`](../../instructions/punch-architecture.instructions.md).
+- **Stack:** Docker-first, Python plus pinned PyYAML orchestrator, k6 tests.
+  Docker, Python 3.10+, and `requirements.txt` are explicit prerequisites;
+  never add host `npm`/`k6`, and never make `punch run` install dependencies.
+  See [`punch-architecture.instructions.md`](../../instructions/punch-architecture.instructions.md).
 - **Spec shape:** Punch's spec is *Goal · Non-goals · Constraints · Affected layers ·
   Artifact/log/reporting implications · Acceptance criteria* (defined in `punch-spec`).
   Use that shape; the six-area template below is the generic equivalent.
@@ -74,8 +76,8 @@ when the request is a raw, unformed idea:
    architecture and prior art, not generic product ideation.
 2. **Evaluate & converge.** Cluster what resonated into 2-3 genuinely
    different directions. Stress-test each: user value, feasibility against
-   Punch's stack (Docker-first, Python stdlib, k6 — never host
-   `npm`/`k6`/`pip`), and differentiation. Surface hidden assumptions
+   Punch's stack (Docker-first, Python plus pinned PyYAML, k6 — no host
+   `npm`/`k6`; requirements installation is explicit), and differentiation. Surface hidden assumptions
    explicitly — what you're betting is true, what could kill it, what you're
    choosing to ignore.
 3. **Sharpen.** Produce the problem statement, recommended direction, key
@@ -96,8 +98,10 @@ you're assuming — for Punch that means architecture and runtime, not browsers:
 ASSUMPTIONS I'M MAKING:
 1. This change touches the Python orchestrator only (not Compose or k6).
 2. The evidence contract (reports/state/punch-run.json) is unchanged.
-3. Stdlib-only — no new dependency.
-4. Docker-first — no host npm/k6/pip is introduced.
+3. PyYAML remains the only declared Python runtime dependency; all other
+   orchestration stays standard-library based.
+4. Docker-first — no host npm/k6 is introduced, and requirements installation
+   remains explicit rather than part of `punch run`.
 → Correct me now or I'll proceed with these.
 ```
 
@@ -111,8 +115,8 @@ surface misunderstandings *before* code gets written.
    `./bin/punch doctor`, `./bin/punch run smoke|gate|journey|all` — never `npm`.
 3. **Affected layers** — which of bash / Python orchestrator / Compose / k6 /
    reporting the change owns and which it must not touch (the `punch-spec` field).
-4. **Constraints** — what the implementation may not do (stdlib only, no service
-   renames without a cascade, no host tooling).
+4. **Constraints** — what the implementation may not do (no undeclared Python
+   dependency, no service renames without a cascade, no host npm/k6 tooling).
 5. **Artifact / log / reporting implications** — will any artifact path or schema
    change? Will terminal noise change? (explicit, even if "none").
 6. **Acceptance criteria** — the conditions Verify will assert, naming
@@ -172,4 +176,5 @@ Before advancing to Plan, confirm:
 - [ ] Affected layers are named (from `punch-boundaries.md`).
 - [ ] Artifact/log/reporting implications are explicit (even "none").
 - [ ] Acceptance criteria name `reports/state/punch-run.json`.
-- [ ] No host `npm`/`k6`/`pip` assumption crept in.
+- [ ] No host `npm`/`k6` assumption crept in; pinned PyYAML installation is an
+  explicit prerequisite when runtime commands are named.

@@ -11,16 +11,17 @@ Scope: **every file**. Always-on architectural contract. Visual layer map: see [
 | Layer | Owns | Lives in |
 |---|---|---|
 | Bash wrapper | route shell calls to Python | `bin/punch`, `bin/*` |
-| Python orchestrator | argparse, subprocess streaming, exit codes, evidence file | `src/punch/**` |
+| Punch engine | reusable YAML loading, launch, streaming, CSV harvesting, evidence | `src/punch/**` |
 | Docker Compose | services as runtime boundaries, image names, ports, env, healthchecks, volumes | `docker-compose.yml` |
 | Dockerfiles | how each service built | `docker/*.Dockerfile` |
 | Service code | per-service behavior (gateway / catalog / orders) | `src/services/**` |
-| k6 tests | scenarios, thresholds, `handleSummary`, checks | `src/tests/**` |
+| Consumer workload | workflow YAML plus k6 scenarios, thresholds, `handleSummary`, checks | consumer repository `workflows/**/*.yaml`, `src/tests/**` |
 | Artifacts / reports | contract between runtime and downstream consumers | `reports/**` |
 
 ## Rules
 
 - **Python owns orchestration.** Anything deciding *what to run, what order, what evidence* lives in `src/punch/`. Bash and k6 no.
+- **Consumer workloads stay consumer-owned.** Consumer repositories own workflow YAML and k6 scripts. Punch owns the reusable `src/punch/` engine; this repository may carry bundled fixture workflows and examples, but they do not transfer workload ownership to Punch.
 - **Docker Compose owns runtime boundaries.** Service names, ports, env vars, dependencies, volumes = contracts. Renames cascade.
 - **k6 owns test behavior only.** k6 no start containers, no poll state, no write outside `/reports/`.
 - **Bash thin wrapper.** bin script that branches on output or computes pass/fail belongs in Python.

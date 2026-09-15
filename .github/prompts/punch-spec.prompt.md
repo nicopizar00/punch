@@ -33,7 +33,8 @@ run `punch-spec-driven-development`'s clarify step (absorbed from the retired
 2. Enumerate non-goals — what this work explicitly won't do.
 3. Capture functional requirements — observable behavior change delivers.
 4. Capture technical constraints — what implementation may not do
-   (no host deps, stdlib only, no Compose service renames, etc.).
+   (no undeclared Python dependency beyond pinned PyYAML, no host npm/k6,
+   no Compose service renames, etc.).
 5. Identify affected architectural layers (see
    [`punch-boundaries.md`](../../docs/architecture/punch-boundaries.md)).
 6. Call out artifact / log / reporting implications. Any artifact path or

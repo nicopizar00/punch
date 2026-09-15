@@ -22,8 +22,9 @@ reporting/state code in `src/punch/`), artifact dir
 
 ## Rules
 
-- **Stable artifact paths.** Five paths above part of public
-  contract. Rename or split any = contract change — must
+- **Stable artifact paths.** The fixed paths above are part of the public
+  contract. Workflow-configured CSV is optional and excluded from that
+  fixed-path count. Rename or split a fixed path = contract change — must
   update `docs/ai/maintenance-matrix.md` and every downstream
   consumer (CI workflow, this file, relevant skill).
 - **Low-noise terminal output by default.** Terminal show progress

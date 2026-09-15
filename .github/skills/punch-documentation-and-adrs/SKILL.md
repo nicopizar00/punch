@@ -44,7 +44,7 @@ with sequential numbering. Don't delete superseded ADRs; write a new one that
 references the old.
 
 ```markdown
-# ADR-001: Python stdlib-only orchestrator
+# ADR-005: Workflow YAML runtime
 
 ## Status
 Accepted
@@ -53,25 +53,27 @@ Accepted
 2026-06-17
 
 ## Context
-`bin/punch` orchestrates docker compose runs. The host should require only Docker
-and Python 3 — no pip step, no virtualenv, no lockfile to drift.
+`bin/punch` orchestrates Docker Compose runs from normalized YAML workflows.
+Docker, Python 3.10+, and pinned PyYAML requirements are host prerequisites.
 
 ## Decision
-Implement the orchestrator with the standard library only (`argparse`,
-`subprocess`, `pathlib`, `json`). No pip-installed packages, ever.
+Use PyYAML 6.0.3 as the declared host runtime dependency for workflow loading;
+keep all other orchestration in the standard library (`argparse`, `subprocess`,
+`pathlib`, `json`). Install requirements explicitly, never from `punch run`.
 
 ## Alternatives Considered
-### A CLI framework (click / typer)
+### A broader CLI framework (click / typer)
 - Pros: ergonomic arg parsing, less boilerplate.
-- Rejected: adds a pip dependency and a host install step, breaking "Docker First".
+- Rejected: adds an unnecessary dependency beyond the pinned YAML runtime.
 
 ### A shell-only wrapper
 - Rejected: control flow (exit-code propagation, evidence writing) belongs in
   Python; bash stays a thin exec wrapper.
 
 ## Consequences
-- Zero host Python deps; `argparse` covers the small command set.
-- New orchestrator features must fit the stdlib — a recurring constraint, by design.
+- One pinned PyYAML host dependency; `argparse` covers the small command set.
+- New orchestrator features remain standard-library based unless a new decision
+  explicitly changes the runtime contract.
 ```
 
 ## Inline Documentation
