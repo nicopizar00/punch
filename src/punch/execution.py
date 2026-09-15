@@ -45,7 +45,7 @@ def build_compose_run_command(
     for name in workflow.forward_environment:
         if name in environment:
             command.extend(["-e", f"{name}={environment[name]}"])
-    command.extend([workflow.compose_service, "k6", "run", workflow.k6_script])
+    command.extend([workflow.compose_service, "run", workflow.k6_script])
     return command
 
 

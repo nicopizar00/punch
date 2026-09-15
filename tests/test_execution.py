@@ -84,6 +84,8 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn("BASE_URL=http://target", command)
         self.assertIn("RUN_ID=run-7", command)
         self.assertNotIn("SECRET=ignored", command)
+        self.assertLess(command.index("BASE_URL=http://target"), command.index("RUN_ID=run-7"))
+        self.assertEqual(command.count("k6"), 1)
         self.assertEqual(command[-3:], ["k6", "run", "/scripts/csv-output.js"])
 
     def test_missing_required_environment_fails_before_subprocess(self) -> None:
@@ -172,6 +174,8 @@ class ExecutionTests(unittest.TestCase):
         self.assertTrue(result.passed)
         self.assertEqual(arguments.count("compose"), 1)
         self.assertEqual(arguments.count("run"), 2)
+        self.assertEqual(arguments.count("k6"), 1)
+        self.assertEqual(arguments[-3:], ["k6", "run", "/scripts/csv-output.js"])
         self.assertEqual(forwarded, ["RUN_ID=run-7"])
         self.assertNotIn("BASE_URL=http://target", arguments)
         self.assertNotIn("SECRET=ignored", arguments)
