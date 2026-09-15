@@ -120,9 +120,11 @@ silently remove things you're unsure about.
 
 ## Dependency Discipline
 
-Before any new dependency: does the existing stack solve it? Punch is **stdlib
-Python only** for the orchestrator; `pg` exists only inside `orders`' image; no
-host `npm`/`pip`. Every dependency is a liability — default to "no".
+Before any new dependency: does the existing stack solve it? Punch uses pinned
+**PyYAML 6.0.3** for workflow loading and keeps all other orchestration
+standard-library based; `pg` exists only inside `orders`' image. Install the
+pinned requirements explicitly, never from `punch run`; no host `npm` is part
+of the runtime contract. Every dependency is a liability — default to "no".
 
 ## Honesty in Review
 

@@ -23,7 +23,9 @@ activate (Build phase). Punch reshapes the generic loop:
   read-only / forbidden paths
   ([`scoped-build-policy.md`](../../../docs/ai/scoped-build-policy.md)). Scope
   expansion → **stop, return to Plan**.
-- **Stack:** Docker-first, stdlib Python, k6 — never host `npm`/`k6`/`pip`.
+- **Stack:** Docker-first, Python plus pinned PyYAML, k6 — install
+  `requirements.txt` explicitly, never from `punch run`; never add host
+  `npm`/`k6` to the runtime contract.
 - **On demand:** [`punch-source-driven-development`](../punch-source-driven-development/SKILL.md)
   when implementing against a k6/Docker/Postgres API; [`punch-doubt-driven-development`](../punch-doubt-driven-development/SKILL.md)
   for non-trivial or irreversible decisions.

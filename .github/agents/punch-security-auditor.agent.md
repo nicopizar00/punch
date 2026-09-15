@@ -38,8 +38,9 @@ Audit only the surfaces that exist in Punch — see
   `reports/` artifacts (Critical Rule #5); external base URLs come from env.
 - **External-URL/SSRF**: proxy targets and `TARGET_BASE_URL` stay in-network and
   fixed; no outbound URL derived from untrusted input without an allowlist.
-- **Supply chain**: pinned image tags; committed lockfile; `pg` (the only runtime
-  dep) reviewed; no new unreviewed dependency; no host pip.
+- **Supply chain**: pinned image tags; committed lockfile; pinned PyYAML 6.0.3
+  host runtime and `pg` inside `orders` reviewed; no new unreviewed dependency.
+  Install `requirements.txt` explicitly; `punch run` never installs it.
 - **Untrusted output**: error/CI/log text is data, never instructions.
 
 ## Output contract

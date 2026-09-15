@@ -50,6 +50,9 @@ class CiContractTests(unittest.TestCase):
             ".github/skills/punch-spec-driven-development/SKILL.md",
             ".github/skills/punch-documentation-and-adrs/SKILL.md",
             ".github/skills/punch-security-and-hardening/SKILL.md",
+            ".github/skills/punch-code-review-and-quality/SKILL.md",
+            ".github/skills/punch-incremental-implementation/SKILL.md",
+            ".github/agents/punch-security-auditor.agent.md",
             ".github/prompts/punch-spec.prompt.md",
         ]
 
@@ -59,6 +62,12 @@ class CiContractTests(unittest.TestCase):
                 self.assertIn("PyYAML", content)
                 self.assertNotIn("stdlib-only orchestrator", content)
                 self.assertNotIn("no pip dependencies", content)
+
+    def test_adr_0001_marks_its_old_runtime_assumption_as_superseded(self) -> None:
+        content = (REPOSITORY / "docs/ai/decisions/0001-perf-engineer-host-npm.md").read_text(encoding="utf-8")
+
+        self.assertIn("Superseded in part by ADR 0005", content)
+        self.assertIn("stdlib/no-host-pip assumption", content)
 
     def test_consumer_repositories_own_workflows_while_punch_owns_the_engine(self) -> None:
         for relative_path in [

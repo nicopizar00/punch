@@ -7,6 +7,11 @@ router). This ADR's exception now binds to punch-builder's
 **performance-test subsystem work** specifically, not to the whole agent.
 **Deciders:** repository owner + Punch Builder architecture work
 
+> **Superseded in part by ADR 0005:** the historical stdlib/no-host-pip assumption
+> in this ADR is superseded by the pinned PyYAML host runtime and
+> explicit `requirements.txt` installation. This ADR's narrow host-`npm`/`k6`
+> authoring exception for the performance-test subsystem remains accepted.
+
 ## Context
 
 Punch Rule #1 = **Docker First**: host need only Docker + stdlib Python 3 runtime — "no Node, no k6". `npm`/esbuild run **inside** `docker/k6.Dockerfile` builder stage, never host commands.
