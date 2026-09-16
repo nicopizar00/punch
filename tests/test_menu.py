@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import unittest
@@ -96,9 +97,20 @@ class MenuTests(unittest.TestCase):
         )
         return path
 
-    def fake_docker_calls(self) -> list[list[str]]:
-        import json
+    def write_options(self, name: str, content: dict | str) -> Path:
+        options_dir = self.root_options_dir()
+        options_dir.mkdir(exist_ok=True)
+        path = options_dir / f"{name}.json"
+        if isinstance(content, str):
+            path.write_text(content, encoding="utf-8")
+        else:
+            path.write_text(json.dumps(content), encoding="utf-8")
+        return path
 
+    def root_options_dir(self) -> Path:
+        return self.root / "options"
+
+    def fake_docker_calls(self) -> list[list[str]]:
         if not self.args_path.exists():
             return []
         return [json.loads(line) for line in self.args_path.read_text(encoding="utf-8").splitlines()]
@@ -244,6 +256,91 @@ class MenuTests(unittest.TestCase):
                 rc = run_menu(self.root)
         self.assertEqual(rc, 1)
         self.assertEqual(self.fake_docker_calls(), [])
+
+    def test_discover_options_lists_json_files_sorted(self) -> None:
+        self.write_options("b-preset", {"VUS": 2})
+        self.write_options("a-preset", {"VUS": 1})
+        from punch.menu import discover_options
+
+        self.assertEqual(
+            [path.stem for path in discover_options(self.root_options_dir())],
+            ["a-preset", "b-preset"],
+        )
+
+    def test_options_preset_is_forwarded_to_compose_run(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
+        self.write_options("5-vus", {"VUS": 5})
+        with self.select_menu(0, 0, 0, 1):
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("VUS=5", call)
+
+    def test_skipping_options_preset_leaves_var_unforwarded(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
+        self.write_options("5-vus", {"VUS": 5})
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VUS", None)
+            with self.select_menu(0, 0, 0, 0):
+                rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertFalse(any(part.startswith("VUS=") for part in call))
+
+    def test_missing_options_dir_skips_step(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
+        with self.select_menu(0, 0, 0):
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.fake_docker_calls()), 1)
+
+    def test_workflow_without_extra_forward_vars_skips_options_step(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_options("5-vus", {"VUS": 5})
+        with self.select_menu(0, 0, 0):
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.fake_docker_calls()), 1)
+
+    def test_canceling_options_menu_does_not_run_workflow(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
+        self.write_options("5-vus", {"VUS": 5})
+        with self.select_menu(0, 0, 0, None):
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.fake_docker_calls(), [])
+
+    def test_malformed_options_json_warns_and_skips_merge(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
+        self.write_options("broken", "not json")
+        with self.select_menu(0, 0, 0, 1):
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertFalse(any(part.startswith("VUS=") for part in call))
+
+    def test_default_options_dir_is_sibling_of_workflows_dir(self) -> None:
+        workflows_dir = self.root / "workflows"
+        workflows_dir.mkdir()
+        import shutil
+
+        shutil.copy(self.root / "docker-compose.yml", workflows_dir / "docker-compose.yml")
+        (workflows_dir / "fixture.yaml").write_text(
+            WORKFLOW_TEMPLATE.format(
+                name="fixture",
+                environment="  environment:\n    forward: [BASE_URL, VUS]\n",
+                outputs="",
+            ),
+            encoding="utf-8",
+        )
+        options_dir = self.root / "options"
+        options_dir.mkdir()
+        (options_dir / "5-vus.json").write_text(json.dumps({"VUS": 5}), encoding="utf-8")
+        with self.select_menu(0, 0, 0, 1):
+            rc = run_menu(workflows_dir)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("VUS=5", call)
 
 
 class _SelectedMenu:

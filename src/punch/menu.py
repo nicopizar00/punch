@@ -29,6 +29,12 @@ def discover_workflows(workflows_dir: Path) -> List[Path]:
     return sorted(workflows_dir.glob("*.yaml"))
 
 
+def discover_options(options_dir: Path) -> List[Path]:
+    if not options_dir.is_dir():
+        return []
+    return sorted(options_dir.glob("*.json"))
+
+
 def _prompt(question: str, default: Optional[str] = None) -> str:
     suffix = f" [{default}]" if default else ""
     answer = input(f"{question}{suffix}: ").strip()
@@ -81,6 +87,32 @@ def _choose_base_url(workflow: K6Workflow) -> Optional[str]:
     return current or None
 
 
+def _load_options_preset(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        print(f"[punch] could not read options preset {path.name}: {error}", file=sys.stderr)
+        return {}
+    if not isinstance(data, dict):
+        print(f"[punch] options preset {path.name} must be a JSON object; ignoring.", file=sys.stderr)
+        return {}
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def _choose_options(workflow: K6Workflow, options_dir: Path) -> dict:
+    extra_names = [name for name in workflow.forward_environment if name != "BASE_URL"]
+    if not extra_names:
+        return {}
+    paths = discover_options(options_dir)
+    if not paths:
+        return {}
+    entries = ["Skip (use env/default)"] + [path.stem for path in paths]
+    choice = _select(entries, "Load an options preset:")
+    if choice == 0:
+        return {}
+    return _load_options_preset(paths[choice - 1])
+
+
 def _choose_confirm_output_data(workflow: K6Workflow) -> bool:
     if workflow.csv_output is None:
         return True
@@ -126,12 +158,12 @@ def _monitoring_setup() -> int:
     return 0
 
 
-def run_menu(workflows_dir: Path) -> int:
+def run_menu(workflows_dir: Path, options_dir: Optional[Path] = None) -> int:
     try:
         action = _choose_top_level_action()
         if action == 1:
             return _monitoring_setup()
-        return _run_workflow_menu(workflows_dir)
+        return _run_workflow_menu(workflows_dir, options_dir)
     except _MenuCancelled:
         print("[punch] menu canceled.")
         return 0
@@ -140,7 +172,8 @@ def run_menu(workflows_dir: Path) -> int:
         return 1
 
 
-def _run_workflow_menu(workflows_dir: Path) -> int:
+def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) -> int:
+    resolved_options_dir = options_dir if options_dir is not None else workflows_dir.parent / "options"
     paths = discover_workflows(workflows_dir)
     if not paths:
         print(f"[punch] no workflow YAMLs found under {workflows_dir}")
@@ -155,11 +188,13 @@ def _run_workflow_menu(workflows_dir: Path) -> int:
         return 1
 
     base_url = _choose_base_url(workflow)
+    options = _choose_options(workflow, resolved_options_dir)
     confirmed = _choose_confirm_output_data(workflow)
 
     environment = dict(os.environ)
     if base_url is not None:
         environment["BASE_URL"] = base_url
+    environment.update(options)
 
     command = build_compose_run_command(workflow, environment)
     docker_run_confirmed = confirm_docker_run(
