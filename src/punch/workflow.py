@@ -16,6 +16,11 @@ class CsvOutput:
 
 
 @dataclass(frozen=True)
+class SummaryOutput:
+    path: Path
+
+
+@dataclass(frozen=True)
 class K6Workflow:
     source_path: Path
     name: str
@@ -26,6 +31,7 @@ class K6Workflow:
     forward_environment: tuple[str, ...]
     required_environment: tuple[str, ...]
     csv_output: CsvOutput | None
+    summary_output: SummaryOutput | None
 
 
 ROOT_KEYS = {"apiVersion", "kind", "metadata", "spec"}
@@ -34,8 +40,9 @@ SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs"}
 COMPOSE_KEYS = {"file", "service"}
 K6_KEYS = {"script"}
 ENVIRONMENT_KEYS = {"forward", "required"}
-OUTPUT_KEYS = {"csv"}
+OUTPUT_KEYS = {"csv", "summary"}
 CSV_KEYS = {"path"}
+SUMMARY_KEYS = {"path"}
 NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 ENV_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
@@ -186,6 +193,17 @@ def load_workflow(path: Path) -> K6Workflow:
             )
         )
 
+    summary_output = None
+    if "summary" in outputs:
+        summary = _allowed_keys(outputs["summary"], SUMMARY_KEYS, "outputs.summary")
+        summary_output = SummaryOutput(
+            _resolve_beneath(
+                working_directory,
+                _string(_required(summary, "path", "outputs.summary"), "outputs.summary.path"),
+                "summary path",
+            )
+        )
+
     return K6Workflow(
         source_path=source_path,
         name=name,
@@ -196,4 +214,5 @@ def load_workflow(path: Path) -> K6Workflow:
         forward_environment=forward_environment,
         required_environment=required_environment,
         csv_output=csv_output,
+        summary_output=summary_output,
     )

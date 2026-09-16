@@ -1,7 +1,0 @@
-# .ai-upstream/ — local staging for upstream Agent Skills (gitignored).
-#
-# Convenience landing zone: safe-copy an upstream skill here verbatim, then copy it
-# into the VS Code / GitHub Copilot .github/ directory and adapt it (prompt -> filter
-# -> adapt) into Punch canon (e.g. via Claude Code). Contents are intentionally NOT
-# tracked; .github/ holds the canonical, adapted skills. This file only preserves the
-# directory in git.

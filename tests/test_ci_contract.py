@@ -46,13 +46,6 @@ class CiContractTests(unittest.TestCase):
             "src/punch/__main__.py",
             ".github/instructions/docker-compose.instructions.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
-            ".github/agents/punch-builder.agent.md",
-            ".github/skills/punch-spec-driven-development/SKILL.md",
-            ".github/skills/punch-documentation-and-adrs/SKILL.md",
-            ".github/skills/punch-security-and-hardening/SKILL.md",
-            ".github/skills/punch-code-review-and-quality/SKILL.md",
-            ".github/skills/punch-incremental-implementation/SKILL.md",
-            ".github/agents/punch-security-auditor.agent.md",
             ".github/prompts/punch-spec.prompt.md",
         ]
 

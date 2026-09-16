@@ -49,6 +49,23 @@ def build_compose_run_command(
     return command
 
 
+def confirm_docker_run(
+    command: Sequence[str], *, assume_yes: bool, stdin: IO[str], stdout: IO[str]
+) -> bool:
+    """Ask before Docker Compose runs, since `compose run` may build images.
+
+    Only interactive terminals are prompted — non-interactive callers (CI,
+    piped input) proceed automatically so automated runs are never blocked.
+    """
+    if assume_yes or not stdin.isatty():
+        return True
+    stdout.write("Punch orchestrator will run Docker Compose (this may build images):\n")
+    stdout.write(f"  {' '.join(command)}\n")
+    stdout.write("Proceed? [y/N] ")
+    stdout.flush()
+    return stdin.readline().strip().lower() in {"y", "yes"}
+
+
 def confirm_output_data(
     workflows: Sequence[K6Workflow], *, assume_yes: bool, stdin: IO[str], stdout: IO[str]
 ) -> bool:
@@ -190,12 +207,22 @@ def execute_workflow(
     *,
     environment: Mapping[str, str],
     output_data_confirmed: bool,
+    docker_run_confirmed: bool = True,
     stdout: IO[str] | None = None,
     stderr: IO[str] | None = None,
     log_path: Path | None = None,
 ) -> ExecutionResult:
     command = build_compose_run_command(workflow, environment)
     csv_path = workflow.csv_output.path if workflow.csv_output is not None else None
+    if not docker_run_confirmed:
+        return _result(
+            workflow,
+            command,
+            child_exit_code=None,
+            passed=False,
+            failure="Docker Compose run was not confirmed",
+            csv_path=csv_path,
+        )
     missing = [name for name in workflow.required_environment if not environment.get(name)]
     if missing:
         return _result(
