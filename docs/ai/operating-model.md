@@ -136,8 +136,9 @@ during Review. Skill axes detailed in
 
 ## Where this differs from a generic agent setup
 
-- Orchestrator is Python plus pinned PyYAML 6.0.3; all other orchestration
-  remains standard-library based. Agents make dependency installation an
+- Orchestrator is Python plus pinned PyYAML 6.0.3 and simple-term-menu 1.6.6;
+  orchestration outside YAML loading and interactive selection remains
+  standard-library based. Agents make dependency installation an
   explicit host setup step and never trigger it from `punch run`.
 - Consumer repositories own workflow YAML and k6 scripts. Punch owns the
   reusable `src/punch/` engine; this repository's `workflows/k6/*.yaml` files

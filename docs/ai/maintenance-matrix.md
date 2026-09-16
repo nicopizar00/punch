@@ -38,7 +38,7 @@ Matrix map change in one area to places reviewers and agents must check/adjust. 
 6) bin/punch and src/punch/* (orchestration CLI)
    - CLI flags, subcommands, or behavior change:
      - Update README quick-start commands, CONTRIBUTING.md, and .github/workflows/copilot-setup-steps.yml for new usage.
-     - Keep orchestration standard-library based beyond the pinned PyYAML runtime; flag undeclared pip/npm additions in review.
+     - Keep orchestration standard-library based beyond pinned PyYAML loading and simple-term-menu selection; flag undeclared pip/npm additions in review.
      - Update streaming pattern example in `.github/instructions/python-orchestrator.instructions.md` if streaming contract evolves.
    - YAML execution, CSV, or evidence behavior changes:
      - Update `requirements.txt`, ADR 0005, CI setup, and public prerequisite commands together.

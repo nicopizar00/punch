@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from simple_term_menu import TerminalMenu
+
 from punch.execution import (
     ExecutionResult,
     build_compose_run_command,
@@ -33,17 +35,30 @@ def _prompt(question: str, default: Optional[str] = None) -> str:
     return answer or (default or "")
 
 
+class _MenuCancelled(Exception):
+    """An operator left a selection menu without choosing an action."""
+
+
+class _MenuUnavailable(Exception):
+    """The terminal menu could not acquire a controlling terminal."""
+
+
+def _select(entries: List[str], title: str) -> int:
+    # Compose confirmation reads sys.stdin; never let the picker read /dev/tty
+    # while redirected stdin silently disables that confirmation.
+    if not sys.stdin.isatty():
+        raise _MenuUnavailable
+    try:
+        selection = TerminalMenu(entries, title=title).show()
+    except (OSError, NotImplementedError) as error:
+        raise _MenuUnavailable from error
+    if selection is None:
+        raise _MenuCancelled
+    return selection
+
+
 def _choose_workflow(paths: List[Path]) -> Path:
-    print("Available k6 workflows:")
-    for index, path in enumerate(paths, start=1):
-        print(f"  {index}) {path.stem}")
-    print()
-    while True:
-        choice = _prompt("Pick a workflow number", default="1")
-        try:
-            return paths[int(choice) - 1]
-        except (ValueError, IndexError):
-            print("Invalid choice, try again.")
+    return paths[_select([path.stem for path in paths], "Available k6 workflows:")]
 
 
 def _default_base_url() -> Optional[str]:
@@ -60,11 +75,8 @@ def _choose_base_url(workflow: K6Workflow) -> Optional[str]:
     if "BASE_URL" not in workflow.forward_environment:
         return None
     current = os.environ.get("BASE_URL") or _default_base_url()
-    print()
-    print(f"1) Current ({current or 'unset'})")
-    print("2) Custom URL")
-    choice = _prompt("Pick a target", default="1")
-    if choice == "2":
+    choice = _select([f"Current ({current or 'unset'})", "Custom URL"], "Pick a target:")
+    if choice == 1:
         return _prompt("Enter BASE_URL", default=current or "")
     return current or None
 
@@ -105,17 +117,8 @@ def _report(workflow: K6Workflow, result: ExecutionResult) -> int:
     return 1
 
 
-def _choose_top_level_action() -> str:
-    print("[punch] Punch orchestrator.")
-    print()
-    print("1) Run workflow")
-    print("2) Monitoring setup")
-    print()
-    while True:
-        choice = _prompt("Pick an option", default="1")
-        if choice in ("1", "2"):
-            return choice
-        print("Invalid choice, try again.")
+def _choose_top_level_action() -> int:
+    return _select(["Run workflow", "Monitoring setup"], "[punch] Punch orchestrator.")
 
 
 def _monitoring_setup() -> int:
@@ -124,10 +127,17 @@ def _monitoring_setup() -> int:
 
 
 def run_menu(workflows_dir: Path) -> int:
-    action = _choose_top_level_action()
-    if action == "2":
-        return _monitoring_setup()
-    return _run_workflow_menu(workflows_dir)
+    try:
+        action = _choose_top_level_action()
+        if action == 1:
+            return _monitoring_setup()
+        return _run_workflow_menu(workflows_dir)
+    except _MenuCancelled:
+        print("[punch] menu canceled.")
+        return 0
+    except _MenuUnavailable:
+        print("[punch] interactive menu requires a terminal.", file=sys.stderr)
+        return 1
 
 
 def _run_workflow_menu(workflows_dir: Path) -> int:

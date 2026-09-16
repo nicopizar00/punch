@@ -23,7 +23,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
 - **TypeScript** — author tests with types and editor support.
 - **esbuild** — bundles TypeScript to one ES module per test file. Runs inside the Docker build stage; not required on the host.
 - **Docker / Docker Compose** — primary interface. Multi-stage build handles bundling and execution.
-- **Python 3 + PyYAML 6.0.3** — thin orchestration façade at `bin/punch` (entry point) and `src/punch/` (CLI module). Docker, Python 3.10+, and pinned requirements are host prerequisites; all orchestration beyond YAML loading stays standard-library based.
+- **Python 3 + pinned PyYAML and simple-term-menu** — thin orchestration façade at `bin/punch` (entry point) and `src/punch/` (CLI module). Docker, Python 3.10+, and pinned requirements are host prerequisites; outside YAML loading and interactive selection, orchestration stays standard-library based.
 - **GitHub Actions** — builds, runs the full test suite, collects artifacts, validates artifact transfer between jobs.
 - **Postgres 16** — persistence for the orders reference service. Schema seeded via `docker/postgres/init.sql`.
 - **pg** — Postgres client used only by `orders-api`, installed inside its Docker image.
@@ -49,7 +49,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │   │   ├── browser-smoke.ts.example  # deferred k6 Browser placeholder
     │   │   └── support/
     │   │       └── report.ts             # shared HTML report builder
-    │   └── punch/                        # Python + PyYAML orchestrator
+    │   └── punch/                        # Python orchestrator with pinned requirements
     │       ├── __init__.py
     │       ├── __main__.py               # argparse CLI; streams docker compose
     │       ├── menu.py                   # `punch menu` interactive workflow picker
@@ -180,9 +180,9 @@ Python CLI reaches feature parity):
   `dist/`. The support module is bundled into each test, not a separate
   output. `browser-smoke.ts.example` is a deferred placeholder — do not
   build it.
-- `src/punch/` is the Python + PyYAML orchestrator. `src/punch/execution.py`
+- `src/punch/` is the Python orchestrator with pinned YAML/menu dependencies. `src/punch/execution.py`
   owns launch, separate stdout/stderr logs, CSV confirmation, and harvesting;
-  all remaining orchestration is standard-library based. Definitions live in
+  other orchestration is standard-library based. Definitions live in
   `workflows/k6/*.yaml`; one workflow is one Compose run and `punch run` does
   not build images. CSV prompts apply only to declared output; CI selects CSV
   workflows with `--confirm-output-data`.

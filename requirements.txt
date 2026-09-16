@@ -1,1 +1,2 @@
 PyYAML==6.0.3
+simple-term-menu==1.6.6

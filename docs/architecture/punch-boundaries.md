@@ -11,7 +11,7 @@ Most "why did this go wrong?" answers map to a boundary crossing.
 │ Host                  developer/CI machine                   │
 │   requires:           Docker + Python 3.10+ + requirements   │
 │   never installs:     Node, npm, k6 (Punch setup installs     │
-│                       pinned PyYAML explicitly)              │
+│                       pinned Python requirements explicitly) │
 ├──────────────────────────────────────────────────────────────┤
 │ Bash wrapper          bin/punch (entrypoint), bin/test-*     │
 │   responsibility:     route the shell call to Python         │
