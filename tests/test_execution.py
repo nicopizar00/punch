@@ -275,15 +275,21 @@ class ExecutionTests(unittest.TestCase):
 
     def test_reader_decode_error_terminates_backpressured_child_without_publication(self) -> None:
         child_pid_path = self.root / "child.pid"
+        descendant_pid_path = self.root / "descendant.pid"
         docker = self.bin_path / "docker"
         docker.write_text(
             """#!/usr/bin/env python3
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 Path(os.environ[\"CHILD_PID_PATH\"]).write_text(str(os.getpid()), encoding=\"utf-8\")
+descendant = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(30)\"])
+Path(os.environ[\"DESCENDANT_PID_PATH\"]).write_text(
+    str(descendant.pid), encoding=\"utf-8\"
+)
 sys.stdout.buffer.write(b\"[CSV] id,name\\n\")
 sys.stdout.buffer.flush()
 time.sleep(0.05)
@@ -304,7 +310,11 @@ while True:
             target=lambda: result.append(
                 execute_workflow(
                     self.workflow,
-                    environment={**self.env, "CHILD_PID_PATH": str(child_pid_path)},
+                    environment={
+                        **self.env,
+                        "CHILD_PID_PATH": str(child_pid_path),
+                        "DESCENDANT_PID_PATH": str(descendant_pid_path),
+                    },
                     output_data_confirmed=True,
                     stdout=io.StringIO(),
                     stderr=io.StringIO(),
@@ -313,15 +323,17 @@ while True:
         )
         worker.start()
         for _ in range(100):
-            if child_pid_path.exists():
+            if child_pid_path.exists() and descendant_pid_path.exists():
                 break
             time.sleep(0.01)
         self.assertTrue(child_pid_path.exists())
+        self.assertTrue(descendant_pid_path.exists())
         child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
         worker.join(timeout=0.5)
         timed_out = worker.is_alive()
         if timed_out:
-            os.kill(child_pid, signal.SIGKILL)
+            os.killpg(child_pid, signal.SIGKILL)
             worker.join(timeout=1)
 
         self.assertFalse(timed_out)
@@ -333,6 +345,14 @@ while True:
         self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+        for _ in range(100):
+            try:
+                os.kill(descendant_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("descendant process was not terminated")
 
     def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
         self.env.pop("BASE_URL")

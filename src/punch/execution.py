@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -127,22 +128,33 @@ def _read_stream(
     except Exception as error:
         lines.put((stream_name, error))
     finally:
+        _close_stream(stream)
         lines.put((stream_name, None))
+
+
+def _signal_process_group(proc: subprocess.Popen[str], sig: signal.Signals) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, sig)
+            return
+        except (AttributeError, OSError):
+            pass
+    try:
+        if sig == signal.SIGTERM:
+            proc.terminate()
+        else:
+            proc.kill()
+    except OSError:
+        pass
 
 
 def _terminate_and_reap(proc: subprocess.Popen[str]) -> int | None:
     """Stop a child after a stream failure without allowing cleanup to hang."""
-    try:
-        proc.terminate()
-    except OSError:
-        pass
+    _signal_process_group(proc, signal.SIGTERM)
     try:
         return proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-        except OSError:
-            pass
+        _signal_process_group(proc, signal.SIGKILL)
         try:
             return proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
@@ -201,6 +213,7 @@ def execute_workflow(
     temp_path: Path | None = None
     csv_file: IO[str] | None = None
     log_file: IO[str] | None = None
+    proc: subprocess.Popen[str] | None = None
 
     try:
         if csv_path is not None:
@@ -226,6 +239,7 @@ def execute_workflow(
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                start_new_session=True,
             )
         except OSError as error:
             return _result(
@@ -281,16 +295,19 @@ def execute_workflow(
 
         if reader_error is not None:
             child_exit_code = _terminate_and_reap(proc)
-            _close_stream(proc.stdout)
-            _close_stream(proc.stderr)
             for reader in readers:
                 reader.join(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+            if any(reader.is_alive() for reader in readers):
+                _signal_process_group(proc, signal.SIGKILL)
+                for reader in readers:
+                    reader.join(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+            if child_exit_code is not None:
+                proc = None
         else:
             for reader in readers:
                 reader.join()
-            _close_stream(proc.stdout)
-            _close_stream(proc.stderr)
             child_exit_code = proc.wait()
+            proc = None
         if csv_file is not None:
             csv_file.close()
             csv_file = None
@@ -350,6 +367,8 @@ def execute_workflow(
             csv_record_count=csv_record_count,
         )
     finally:
+        if proc is not None:
+            _terminate_and_reap(proc)
         if csv_file is not None:
             csv_file.close()
         if log_file is not None:
