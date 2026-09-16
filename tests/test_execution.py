@@ -362,6 +362,7 @@ while True:
     def test_output_interrupt_kills_term_ignoring_descendant(self) -> None:
         child_pid_path = self.root / "interrupt-child.pid"
         descendant_pid_path = self.root / "interrupt-descendant.pid"
+        descendant_ready_path = self.root / "interrupt-descendant.ready"
         docker = self.bin_path / "docker"
         docker.write_text(
             """#!/usr/bin/env python3
@@ -372,14 +373,19 @@ import time
 from pathlib import Path
 
 Path(os.environ[\"CHILD_PID_PATH\"]).write_text(str(os.getpid()), encoding=\"utf-8\")
+descendant_code = (
+    \"import signal, sys, time; from pathlib import Path; \"
+    \"signal.signal(signal.SIGTERM, signal.SIG_IGN); \"
+    \"Path(sys.argv[1]).write_text('ready', encoding='utf-8'); time.sleep(30)\"
+)
 descendant = subprocess.Popen([
-    sys.executable,
-    \"-c\",
-    \"import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)\",
+    sys.executable, \"-c\", descendant_code, os.environ[\"DESCENDANT_READY_PATH\"]
 ])
 Path(os.environ[\"DESCENDANT_PID_PATH\"]).write_text(
     str(descendant.pid), encoding=\"utf-8\"
 )
+while not Path(os.environ[\"DESCENDANT_READY_PATH\"]).exists():
+    time.sleep(0.01)
 print(\"ordinary output\", flush=True)
 time.sleep(30)
 """,
@@ -394,6 +400,7 @@ time.sleep(30)
                     **self.env,
                     "CHILD_PID_PATH": str(child_pid_path),
                     "DESCENDANT_PID_PATH": str(descendant_pid_path),
+                    "DESCENDANT_READY_PATH": str(descendant_ready_path),
                 },
                 output_data_confirmed=False,
                 stdout=InterruptingOutput(),
