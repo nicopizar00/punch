@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORTS_DIR = REPO_ROOT / "reports"
 STATE_DIR = REPORTS_DIR / "state"
 LOGS_DIR = REPORTS_DIR / "logs"
+SERVICE_LOG_NAMES = ("gateway-api", "catalog-api", "orders-api", "postgres")
 
 BUNDLED_WORKFLOW_DIR = REPO_ROOT / "workflows" / "k6"
 BUNDLED_WORKFLOWS = {
@@ -151,7 +152,7 @@ def _diagnose_target_connectivity() -> None:
 
 
 def _collect_service_logs() -> None:
-    for svc in ("gateway-api", "catalog-api", "orders-api", "postgres"):
+    for svc in SERVICE_LOG_NAMES:
         log = LOGS_DIR / f"{svc}.log"
         try:
             with log.open("w", encoding="utf-8") as fh:
@@ -227,16 +228,24 @@ def cmd_run(args: argparse.Namespace) -> int:
             continue
         runnable.append(workflow)
 
-    for workflow in runnable:
-        if workflow.csv_output is None:
-            continue
-        protected_paths = (
-            STATE_DIR / "punch-run.json",
-            LOGS_DIR / f"k6-{workflow.name}.log",
+    csv_paths = [
+        workflow.csv_output.path
+        for workflow in runnable
+        if workflow.csv_output is not None
+    ]
+    protected_paths = [STATE_DIR / "punch-run.json"]
+    protected_paths.extend(LOGS_DIR / f"k6-{workflow.name}.log" for workflow in runnable)
+    if args.collect_logs:
+        protected_paths.extend(LOGS_DIR / f"{service}.log" for service in SERVICE_LOG_NAMES)
+
+    for index, csv_path in enumerate(csv_paths):
+        collides_with_artifact = any(paths_collide(csv_path, path) for path in protected_paths)
+        collides_with_csv = any(
+            paths_collide(csv_path, other_path) for other_path in csv_paths[index + 1 :]
         )
-        if any(paths_collide(workflow.csv_output.path, path) for path in protected_paths):
+        if collides_with_artifact or collides_with_csv:
             print(
-                f"[punch] CSV output collides with a Punch artifact: {workflow.csv_output.path}",
+                f"[punch] CSV output collides with another run artifact: {csv_path}",
                 file=sys.stderr,
                 flush=True,
             )

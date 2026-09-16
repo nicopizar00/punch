@@ -15,6 +15,7 @@ from punch.workflow import K6Workflow
 
 
 CSV_TAG = "[CSV]"
+PROCESS_STOP_TIMEOUT_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,32 @@ def _read_stream(
         lines.put((stream_name, None))
 
 
+def _terminate_and_reap(proc: subprocess.Popen[str]) -> int | None:
+    """Stop a child after a stream failure without allowing cleanup to hang."""
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    try:
+        return proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            return proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            return None
+
+
+def _close_stream(stream: IO[str]) -> None:
+    try:
+        stream.close()
+    except (OSError, ValueError):
+        pass
+
+
 def execute_workflow(
     workflow: K6Workflow,
     *,
@@ -232,7 +259,7 @@ def execute_workflow(
             if isinstance(line, Exception):
                 if reader_error is None:
                     reader_error = f"could not read {stream_name}: {line}"
-                continue
+                break
 
             destination = output if stream_name == "stdout" else errors
             destination.write(line)
@@ -252,25 +279,22 @@ def execute_workflow(
                         csv_file.flush()
                         csv_record_count += 1
 
-        for reader in readers:
-            reader.join()
-        proc.stdout.close()
-        proc.stderr.close()
-        child_exit_code = proc.wait()
+        if reader_error is not None:
+            child_exit_code = _terminate_and_reap(proc)
+            _close_stream(proc.stdout)
+            _close_stream(proc.stderr)
+            for reader in readers:
+                reader.join(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+        else:
+            for reader in readers:
+                reader.join()
+            _close_stream(proc.stdout)
+            _close_stream(proc.stderr)
+            child_exit_code = proc.wait()
         if csv_file is not None:
             csv_file.close()
             csv_file = None
 
-        if child_exit_code != 0:
-            return _result(
-                workflow,
-                command,
-                child_exit_code=child_exit_code,
-                passed=False,
-                failure=f"Docker Compose exited with code {child_exit_code}",
-                csv_path=csv_path,
-                csv_record_count=csv_record_count,
-            )
         if reader_error is not None:
             return _result(
                 workflow,
@@ -278,6 +302,16 @@ def execute_workflow(
                 child_exit_code=child_exit_code,
                 passed=False,
                 failure=reader_error,
+                csv_path=csv_path,
+                csv_record_count=csv_record_count,
+            )
+        if child_exit_code != 0:
+            return _result(
+                workflow,
+                command,
+                child_exit_code=child_exit_code,
+                passed=False,
+                failure=f"Docker Compose exited with code {child_exit_code}",
                 csv_path=csv_path,
                 csv_record_count=csv_record_count,
             )

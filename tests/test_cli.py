@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.__main__ import main
+from punch.workflow import load_workflow
 
 
 FAKE_DOCKER = """#!/usr/bin/env python3
@@ -100,6 +101,16 @@ class CliTests(unittest.TestCase):
         self.csv_workflow_path.write_text(
             CSV_WORKFLOW.replace("reports/data/fixture.csv", output_path), encoding="utf-8"
         )
+
+    def load_workflow(self, name: str, output_path: str | None = None):
+        path = self.root / f"{name}.yaml"
+        workflow = CSV_WORKFLOW.replace("csv-fixture", name)
+        if output_path is None:
+            workflow = workflow.replace("  outputs:\n    csv:\n      path: reports/data/fixture.csv\n", "")
+        else:
+            workflow = workflow.replace("reports/data/fixture.csv", output_path)
+        path.write_text(workflow, encoding="utf-8")
+        return load_workflow(path)
 
     def fake_docker_arguments(self) -> list[str]:
         if not self.args_path.exists():
@@ -211,6 +222,52 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.compose_run_count(), 0)
         self.assertEqual(log_path.read_text(encoding="utf-8"), "previous log\n")
         self.assertFalse((self.state_dir / "punch-run.json").exists())
+
+    def test_csv_collision_with_another_selected_workflow_log_is_rejected(self) -> None:
+        log_path = self.logs_dir / "k6-second-fixture.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("previous second log\n", encoding="utf-8")
+        self.write_csv_workflow("logs/k6-second-fixture.log")
+        workflows = [
+            load_workflow(self.csv_workflow_path),
+            self.load_workflow("second-fixture"),
+        ]
+
+        with patch("punch.__main__._load_selected_workflows", return_value=workflows):
+            rc = main(["run", "all", "--confirm-output-data"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertEqual(log_path.read_text(encoding="utf-8"), "previous second log\n")
+
+    def test_csv_collision_with_collected_service_log_is_rejected(self) -> None:
+        log_path = self.logs_dir / "gateway-api.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("previous service log\n", encoding="utf-8")
+        self.write_csv_workflow("logs/gateway-api.log")
+
+        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data", "--collect-logs"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertEqual(log_path.read_text(encoding="utf-8"), "previous service log\n")
+
+    def test_selected_csv_destinations_that_alias_are_rejected(self) -> None:
+        destination = self.root / "reports" / "data" / "shared.csv"
+        destination.parent.mkdir(parents=True)
+        destination.write_text("previous csv\n", encoding="utf-8")
+        self.write_csv_workflow("reports/data/shared.csv")
+        workflows = [
+            load_workflow(self.csv_workflow_path),
+            self.load_workflow("second-fixture", "reports/data/shared.csv"),
+        ]
+
+        with patch("punch.__main__._load_selected_workflows", return_value=workflows):
+            rc = main(["run", "all", "--confirm-output-data"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertEqual(destination.read_text(encoding="utf-8"), "previous csv\n")
 
     def test_direct_external_workflow_requires_target_before_run(self) -> None:
         rc = main(["run", "bff-checkout-journey"])

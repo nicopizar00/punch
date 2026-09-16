@@ -3,7 +3,10 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import signal
 import sys
+import threading
+import time
 import unittest
 import warnings
 from pathlib import Path
@@ -60,10 +63,18 @@ class FakeProcess:
         self.stderr = stderr
         self.exit_code = exit_code
         self.wait_called = False
+        self.terminate_called = False
+        self.kill_called = False
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
         self.wait_called = True
         return self.exit_code
+
+    def terminate(self) -> None:
+        self.terminate_called = True
+
+    def kill(self) -> None:
+        self.kill_called = True
 
 
 class ExecutionTests(unittest.TestCase):
@@ -258,8 +269,70 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.csv_record_count, 1)
         self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
         self.assertTrue(process.wait_called)
+        self.assertTrue(process.terminate_called)
         self.assertTrue(stdout.closed)
         self.assertTrue(stderr.closed)
+
+    def test_reader_decode_error_terminates_backpressured_child_without_publication(self) -> None:
+        child_pid_path = self.root / "child.pid"
+        docker = self.bin_path / "docker"
+        docker.write_text(
+            """#!/usr/bin/env python3
+import os
+import sys
+import time
+from pathlib import Path
+
+Path(os.environ[\"CHILD_PID_PATH\"]).write_text(str(os.getpid()), encoding=\"utf-8\")
+sys.stdout.buffer.write(b\"[CSV] id,name\\n\")
+sys.stdout.buffer.flush()
+time.sleep(0.05)
+sys.stdout.buffer.write(b\"\\xff\")
+sys.stdout.buffer.flush()
+while True:
+    sys.stderr.buffer.write(b\"x\" * 65_536)
+    sys.stderr.buffer.flush()
+""",
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
+        self.workflow.csv_output.path.parent.mkdir(parents=True)
+        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
+        result: list[object] = []
+
+        worker = threading.Thread(
+            target=lambda: result.append(
+                execute_workflow(
+                    self.workflow,
+                    environment={**self.env, "CHILD_PID_PATH": str(child_pid_path)},
+                    output_data_confirmed=True,
+                    stdout=io.StringIO(),
+                    stderr=io.StringIO(),
+                )
+            )
+        )
+        worker.start()
+        for _ in range(100):
+            if child_pid_path.exists():
+                break
+            time.sleep(0.01)
+        self.assertTrue(child_pid_path.exists())
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        worker.join(timeout=0.5)
+        timed_out = worker.is_alive()
+        if timed_out:
+            os.kill(child_pid, signal.SIGKILL)
+            worker.join(timeout=1)
+
+        self.assertFalse(timed_out)
+        self.assertEqual(len(result), 1)
+        execution = result[0]
+        self.assertFalse(execution.passed)
+        self.assertIn("could not read stdout", execution.failure)
+        self.assertEqual(execution.csv_record_count, 1)
+        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
 
     def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
         self.env.pop("BASE_URL")
