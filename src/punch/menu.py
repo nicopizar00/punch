@@ -8,12 +8,18 @@ picker on top of it, not a replacement.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from punch.execution import ExecutionResult, execute_workflow
+from punch.execution import (
+    ExecutionResult,
+    build_compose_run_command,
+    confirm_docker_run,
+    execute_workflow,
+)
 from punch.workflow import K6Workflow, WorkflowError, load_workflow
 
 
@@ -63,6 +69,21 @@ def _choose_confirm_output_data(workflow: K6Workflow) -> bool:
     return answer.lower().startswith("y")
 
 
+def _print_metrics(workflow: K6Workflow) -> None:
+    if workflow.summary_output is None or not workflow.summary_output.path.exists():
+        return
+    try:
+        summary = json.loads(workflow.summary_output.path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    print(f"[punch] {workflow.name} metrics:")
+    print(f"  requests    : {summary.get('totalRequests', '?')}")
+    print(f"  error rate  : {summary.get('errorRate', 0) * 100:.2f}%")
+    print(f"  p90 duration: {summary.get('p90Ms', 0):.1f} ms")
+    print(f"  check pass  : {summary.get('checkPassRate', 0) * 100:.2f}%")
+    print(f"  duration    : {summary.get('durationMs', 0) / 1000:.1f}s")
+
+
 def _report(workflow: K6Workflow, result: ExecutionResult) -> int:
     if result.passed:
         print(f"[punch] {workflow.name} completed.")
@@ -74,32 +95,66 @@ def _report(workflow: K6Workflow, result: ExecutionResult) -> int:
     return 1
 
 
+def _choose_top_level_action() -> str:
+    print("[punch] Punch orchestrator.")
+    print()
+    print("1) Run workflow")
+    print("2) Monitoring setup")
+    print()
+    while True:
+        choice = _prompt("Pick an option", default="1")
+        if choice in ("1", "2"):
+            return choice
+        print("Invalid choice, try again.")
+
+
+def _monitoring_setup() -> int:
+    print("[punch] monitoring setup: not implemented yet.")
+    return 0
+
+
 def run_menu(workflows_dir: Path) -> int:
+    action = _choose_top_level_action()
+    if action == "2":
+        return _monitoring_setup()
+    return _run_workflow_menu(workflows_dir)
+
+
+def _run_workflow_menu(workflows_dir: Path) -> int:
     paths = discover_workflows(workflows_dir)
     if not paths:
         print(f"[punch] no workflow YAMLs found under {workflows_dir}")
         return 1
 
-    while True:
-        selected = _choose_workflow(paths)
-        try:
-            workflow = load_workflow(selected)
-        except WorkflowError as error:
-            print(f"[punch] could not load workflow {selected.stem}: {error}", file=sys.stderr)
-            return 1
+    print()
+    selected = _choose_workflow(paths)
+    try:
+        workflow = load_workflow(selected)
+    except WorkflowError as error:
+        print(f"[punch] could not load workflow {selected.stem}: {error}", file=sys.stderr)
+        return 1
 
-        base_url = _choose_base_url(workflow)
-        confirmed = _choose_confirm_output_data(workflow)
+    base_url = _choose_base_url(workflow)
+    confirmed = _choose_confirm_output_data(workflow)
 
-        environment = dict(os.environ)
-        if base_url is not None:
-            environment["BASE_URL"] = base_url
+    environment = dict(os.environ)
+    if base_url is not None:
+        environment["BASE_URL"] = base_url
 
-        print()
-        result = execute_workflow(workflow, environment=environment, output_data_confirmed=confirmed)
-        rc = _report(workflow, result)
-        print()
+    command = build_compose_run_command(workflow, environment)
+    docker_run_confirmed = confirm_docker_run(
+        command, assume_yes=False, stdin=sys.stdin, stdout=sys.stdout
+    )
 
-        again = _prompt("Run another workflow? (y/N)", default="n")
-        if not again.lower().startswith("y"):
-            return rc
+    print()
+    result = execute_workflow(
+        workflow,
+        environment=environment,
+        output_data_confirmed=confirmed,
+        docker_run_confirmed=docker_run_confirmed,
+    )
+    rc = _report(workflow, result)
+    if result.passed:
+        _print_metrics(workflow)
+    print()
+    return rc

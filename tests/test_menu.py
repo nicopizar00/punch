@@ -109,19 +109,21 @@ class MenuTests(unittest.TestCase):
     def test_no_workflows_reports_and_returns_1(self) -> None:
         empty_dir = self.root / "empty"
         empty_dir.mkdir()
-        self.assertEqual(run_menu(empty_dir), 1)
+        with patch("builtins.input", side_effect=["1"]):
+            rc = run_menu(empty_dir)
+        self.assertEqual(rc, 1)
         self.assertEqual(self.fake_docker_calls(), [])
 
     def test_run_menu_executes_selected_workflow_once(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch("builtins.input", side_effect=["1", "1", "n"]):
+        with patch("builtins.input", side_effect=["1", "1", "1"]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.fake_docker_calls()), 1)
 
     def test_custom_base_url_is_forwarded_to_compose_run(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch("builtins.input", side_effect=["1", "2", "http://example.invalid", "n"]):
+        with patch("builtins.input", side_effect=["1", "1", "2", "http://example.invalid"]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
@@ -129,7 +131,7 @@ class MenuTests(unittest.TestCase):
 
     def test_csv_workflow_prompts_for_confirmation(self) -> None:
         self.write_workflow("fixture", csv_path="reports/data/fixture.csv")
-        with patch("builtins.input", side_effect=["1", "n", "n"]):
+        with patch("builtins.input", side_effect=["1", "1", "n"]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 1)
         self.assertEqual(self.fake_docker_calls(), [])
@@ -137,19 +139,19 @@ class MenuTests(unittest.TestCase):
     def test_confirming_csv_workflow_runs_and_writes_output(self) -> None:
         self.write_workflow("fixture", csv_path="reports/data/fixture.csv")
         with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[CSV] id|[CSV] 1"}):
-            with patch("builtins.input", side_effect=["1", "y", "n"]):
+            with patch("builtins.input", side_effect=["1", "1", "y"]):
                 rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(
             (self.root / "reports/data/fixture.csv").read_text(encoding="utf-8"), "id\n1\n"
         )
 
-    def test_run_another_workflow_loops(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch("builtins.input", side_effect=["1", "1", "y", "1", "1", "n"]):
+    def test_monitoring_setup_is_a_stub(self) -> None:
+        self.write_workflow("fixture")
+        with patch("builtins.input", side_effect=["2"]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
-        self.assertEqual(len(self.fake_docker_calls()), 2)
+        self.assertEqual(self.fake_docker_calls(), [])
 
 
 if __name__ == "__main__":
