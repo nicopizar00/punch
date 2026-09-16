@@ -52,6 +52,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │   └── punch/                        # Python + PyYAML orchestrator
     │       ├── __init__.py
     │       ├── __main__.py               # argparse CLI; streams docker compose
+    │       ├── menu.py                   # `punch menu` interactive workflow picker
     │       └── init_scan.py              # `punch init` bootstrap scanner / readiness mapper
     ├── dist/                             # bundled k6-ready JS (gitignored)
     ├── reports/                          # k6 output (gitignored)
@@ -143,6 +144,9 @@ Preferred entry point (Python orchestrator):
 - `./bin/punch run gate` — run catalog performance gate.
 - `./bin/punch run journey` — run order create-read journey.
 - `./bin/punch run all --collect-logs` — full suite + collect service logs.
+- `./bin/punch menu [workflows-dir]` — interactively pick and run one workflow
+  YAML from a directory (defaults to this repo's bundled `workflows/k6/`); a
+  consumer repo passes its own workflows directory.
 - `./bin/punch clean` — tear down containers and volumes.
 
 Legacy bash equivalents (still supported, will be retired once the

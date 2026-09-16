@@ -308,6 +308,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     return overall_rc
 
 
+def cmd_menu(args: argparse.Namespace) -> int:
+    from punch.menu import run_menu
+
+    workflows_dir = Path(args.workflows_dir) if args.workflows_dir else BUNDLED_WORKFLOW_DIR
+    return run_menu(workflows_dir)
+
+
 def cmd_clean(_args: argparse.Namespace) -> int:
     return _stream(["docker", "compose", "down", "--volumes", "--remove-orphans"])
 
@@ -337,6 +344,16 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--confirm-output-data", action="store_true",
                        help="Allow declared CSV output without an interactive confirmation.")
 
+    menu_p = sub.add_parser(
+        "menu", help="Interactively pick and run a k6 workflow from a directory."
+    )
+    menu_p.add_argument(
+        "workflows_dir",
+        nargs="?",
+        default=None,
+        help="Directory of workflow YAML files (default: Punch's own bundled workflows/k6).",
+    )
+
     sub.add_parser("clean", help="Tear down compose stack and volumes.")
 
     init_p = sub.add_parser(
@@ -365,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     dispatch = {
         "doctor": cmd_doctor,
         "run": cmd_run,
+        "menu": cmd_menu,
         "clean": cmd_clean,
         "init": cmd_init,
     }

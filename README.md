@@ -18,6 +18,7 @@ docker compose build
 ./bin/punch run smoke
 ./bin/punch run path/to/workflow.yaml
 ./bin/punch run path/to/csv-workflow.yaml --confirm-output-data
+./bin/punch menu path/to/workflows-dir   # interactively pick + run a workflow
 ```
 
 Each YAML definition in `workflows/k6/*.yaml` produces one explicit Compose
