@@ -51,12 +51,15 @@ def _choose_base_url(workflow: K6Workflow) -> Optional[str]:
         return None
     current = os.environ.get("BASE_URL", "")
     print()
-    print(f"1) Current ({current or 'unset'})")
+    if not current:
+        entered = _prompt("Enter BASE_URL (blank to use default)", default="")
+        return entered or None
+    print(f"1) Current ({current})")
     print("2) Custom URL")
     choice = _prompt("Pick a target", default="1")
     if choice == "2":
         return _prompt("Enter BASE_URL", default=current)
-    return current or None
+    return current
 
 
 def _choose_confirm_output_data(workflow: K6Workflow) -> bool:

@@ -116,18 +116,27 @@ class MenuTests(unittest.TestCase):
 
     def test_run_menu_executes_selected_workflow_once(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch("builtins.input", side_effect=["1", "1", "1"]):
+        with patch("builtins.input", side_effect=["1", "1", ""]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.fake_docker_calls()), 1)
 
     def test_custom_base_url_is_forwarded_to_compose_run(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch("builtins.input", side_effect=["1", "1", "2", "http://example.invalid"]):
+        with patch("builtins.input", side_effect=["1", "1", "http://example.invalid"]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn("BASE_URL=http://example.invalid", call)
+
+    def test_existing_base_url_offers_current_or_custom(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL"])
+        with patch.dict(os.environ, {"BASE_URL": "http://current.invalid"}):
+            with patch("builtins.input", side_effect=["1", "1", "1"]):
+                rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("BASE_URL=http://current.invalid", call)
 
     def test_csv_workflow_prompts_for_confirmation(self) -> None:
         self.write_workflow("fixture", csv_path="reports/data/fixture.csv")
