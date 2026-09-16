@@ -44,6 +44,11 @@ class TtyInput(io.StringIO):
         return True
 
 
+class InterruptingOutput(io.StringIO):
+    def write(self, value: str) -> int:
+        raise KeyboardInterrupt
+
+
 class ExplodingStream:
     def __init__(self, lines: list[str]) -> None:
         self.lines = lines
@@ -353,6 +358,65 @@ while True:
             time.sleep(0.01)
         else:
             self.fail("descendant process was not terminated")
+
+    def test_output_interrupt_kills_term_ignoring_descendant(self) -> None:
+        child_pid_path = self.root / "interrupt-child.pid"
+        descendant_pid_path = self.root / "interrupt-descendant.pid"
+        docker = self.bin_path / "docker"
+        docker.write_text(
+            """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+Path(os.environ[\"CHILD_PID_PATH\"]).write_text(str(os.getpid()), encoding=\"utf-8\")
+descendant = subprocess.Popen([
+    sys.executable,
+    \"-c\",
+    \"import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)\",
+])
+Path(os.environ[\"DESCENDANT_PID_PATH\"]).write_text(
+    str(descendant.pid), encoding=\"utf-8\"
+)
+print(\"ordinary output\", flush=True)
+time.sleep(30)
+""",
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
+
+        with self.assertRaises(KeyboardInterrupt):
+            execute_workflow(
+                self.no_csv_workflow,
+                environment={
+                    **self.env,
+                    "CHILD_PID_PATH": str(child_pid_path),
+                    "DESCENDANT_PID_PATH": str(descendant_pid_path),
+                },
+                output_data_confirmed=False,
+                stdout=InterruptingOutput(),
+                stderr=io.StringIO(),
+            )
+
+        self.assertTrue(child_pid_path.exists())
+        self.assertTrue(descendant_pid_path.exists())
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
+        descendant_survived = True
+        for _ in range(100):
+            try:
+                os.kill(descendant_pid, 0)
+            except ProcessLookupError:
+                descendant_survived = False
+                break
+            time.sleep(0.01)
+        if descendant_survived:
+            os.kill(descendant_pid, signal.SIGKILL)
+        self.assertFalse(descendant_survived)
 
     def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
         self.env.pop("BASE_URL")

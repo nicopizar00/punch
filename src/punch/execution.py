@@ -148,17 +148,34 @@ def _signal_process_group(proc: subprocess.Popen[str], sig: signal.Signals) -> N
         pass
 
 
+def _process_group_exists(proc: subprocess.Popen[str]) -> bool:
+    if os.name != "posix":
+        return False
+    try:
+        os.killpg(proc.pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (AttributeError, OSError):
+        return False
+
+
 def _terminate_and_reap(proc: subprocess.Popen[str]) -> int | None:
     """Stop a child after a stream failure without allowing cleanup to hang."""
     _signal_process_group(proc, signal.SIGTERM)
     try:
-        return proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+        exit_code = proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _signal_process_group(proc, signal.SIGKILL)
         try:
-            return proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+            exit_code = proc.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             return None
+    if _process_group_exists(proc):
+        _signal_process_group(proc, signal.SIGKILL)
+    return exit_code
 
 
 def _close_stream(stream: IO[str]) -> None:
