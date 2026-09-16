@@ -46,20 +46,27 @@ def _choose_workflow(paths: List[Path]) -> Path:
             print("Invalid choice, try again.")
 
 
+def _default_base_url() -> Optional[str]:
+    path = Path(__file__).resolve().parents[2] / "environment" / "docker-host.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("baseUrl")
+    return value if isinstance(value, str) and value else None
+
+
 def _choose_base_url(workflow: K6Workflow) -> Optional[str]:
     if "BASE_URL" not in workflow.forward_environment:
         return None
-    current = os.environ.get("BASE_URL", "")
+    current = os.environ.get("BASE_URL") or _default_base_url()
     print()
-    if not current:
-        entered = _prompt("Enter BASE_URL (blank to use default)", default="")
-        return entered or None
-    print(f"1) Current ({current})")
+    print(f"1) Current ({current or 'unset'})")
     print("2) Custom URL")
     choice = _prompt("Pick a target", default="1")
     if choice == "2":
-        return _prompt("Enter BASE_URL", default=current)
-    return current
+        return _prompt("Enter BASE_URL", default=current or "")
+    return current or None
 
 
 def _choose_confirm_output_data(workflow: K6Workflow) -> bool:

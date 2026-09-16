@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.menu import discover_workflows, run_menu
 
+DEFAULT_BASE_URL = "http://host.docker.internal:3001"
+
 
 FAKE_DOCKER = """#!/usr/bin/env python3
 import json
@@ -116,27 +118,18 @@ class MenuTests(unittest.TestCase):
 
     def test_run_menu_executes_selected_workflow_once(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch("builtins.input", side_effect=["1", "1", ""]):
+        with patch("builtins.input", side_effect=["1", "1", "1"]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.fake_docker_calls()), 1)
 
     def test_custom_base_url_is_forwarded_to_compose_run(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch("builtins.input", side_effect=["1", "1", "http://example.invalid"]):
+        with patch("builtins.input", side_effect=["1", "1", "2", "http://example.invalid"]):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn("BASE_URL=http://example.invalid", call)
-
-    def test_existing_base_url_offers_current_or_custom(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
-        with patch.dict(os.environ, {"BASE_URL": "http://current.invalid"}):
-            with patch("builtins.input", side_effect=["1", "1", "1"]):
-                rc = run_menu(self.root)
-        self.assertEqual(rc, 0)
-        [call] = self.fake_docker_calls()
-        self.assertIn("BASE_URL=http://current.invalid", call)
 
     def test_csv_workflow_prompts_for_confirmation(self) -> None:
         self.write_workflow("fixture", csv_path="reports/data/fixture.csv")
@@ -154,6 +147,24 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(
             (self.root / "reports/data/fixture.csv").read_text(encoding="utf-8"), "id\n1\n"
         )
+
+    def test_current_target_defaults_to_docker_host_json_when_base_url_unset(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL"])
+        os.environ.pop("BASE_URL", None)
+        with patch("builtins.input", side_effect=["1", "1", "1"]):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
+
+    def test_env_base_url_takes_precedence_over_docker_host_json(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL"])
+        with patch.dict(os.environ, {"BASE_URL": "http://current.invalid"}):
+            with patch("builtins.input", side_effect=["1", "1", "1"]):
+                rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("BASE_URL=http://current.invalid", call)
 
     def test_monitoring_setup_is_a_stub(self) -> None:
         self.write_workflow("fixture")
