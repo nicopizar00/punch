@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from punch.menu import discover_workflows, run_menu
 
 DEFAULT_BASE_URL = "http://host.docker.internal:3001"
+DEFAULT_BROWSER_BASE_URL = "http://host.docker.internal:3000"
 
 
 FAKE_DOCKER = """#!/usr/bin/env python3
@@ -42,7 +43,7 @@ spec:
   workingDirectory: .
   compose:
     file: docker-compose.yml
-    service: k6
+    service: {service}
   k6:
     script: /scripts/{name}.js
 {environment}{outputs}
@@ -82,7 +83,12 @@ class MenuTests(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def write_workflow(
-        self, name: str, *, forward: list[str] | None = None, csv_path: str | None = None
+        self,
+        name: str,
+        *,
+        forward: list[str] | None = None,
+        csv_path: str | None = None,
+        service: str = "k6",
     ) -> Path:
         environment = ""
         if forward:
@@ -92,7 +98,9 @@ class MenuTests(unittest.TestCase):
             outputs = f"  outputs:\n    csv:\n      path: {csv_path}\n"
         path = self.root / f"{name}.yaml"
         path.write_text(
-            WORKFLOW_TEMPLATE.format(name=name, environment=environment, outputs=outputs),
+            WORKFLOW_TEMPLATE.format(
+                name=name, service=service, environment=environment, outputs=outputs
+            ),
             encoding="utf-8",
         )
         return path
@@ -192,6 +200,27 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn("BASE_URL=http://current.invalid", call)
+
+    def test_current_target_defaults_to_a_service_specific_host_json(self) -> None:
+        """A workflow on a non-'k6' compose service (e.g. a browser variant)
+        must not default to docker-host.json's BASE_URL — that file is only
+        ever a valid target for the plain 'k6' service."""
+        self.write_workflow("fixture", forward=["BASE_URL"], service="k6-browser")
+        os.environ.pop("BASE_URL", None)
+        with self.select_menu(0, 0, 0):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn(f"BASE_URL={DEFAULT_BROWSER_BASE_URL}", call)
+
+    def test_current_target_falls_back_to_docker_host_json_for_unknown_service(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL"], service="k6-otel")
+        os.environ.pop("BASE_URL", None)
+        with self.select_menu(0, 0, 0):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
 
     def test_monitoring_setup_is_a_stub(self) -> None:
         self.write_workflow("fixture")
@@ -328,6 +357,7 @@ class MenuTests(unittest.TestCase):
         (workflows_dir / "fixture.yaml").write_text(
             WORKFLOW_TEMPLATE.format(
                 name="fixture",
+                service="k6",
                 environment="  environment:\n    forward: [BASE_URL, VUS]\n",
                 outputs="",
             ),

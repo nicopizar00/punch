@@ -67,8 +67,7 @@ def _choose_workflow(paths: List[Path]) -> Path:
     return paths[_select([path.stem for path in paths], "Available k6 workflows:")]
 
 
-def _default_base_url() -> Optional[str]:
-    path = Path(__file__).resolve().parents[2] / "environment" / "docker-host.json"
+def _read_base_url(path: Path) -> Optional[str]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -77,10 +76,28 @@ def _default_base_url() -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+def _default_base_url(compose_service: str) -> Optional[str]:
+    # Different compose services usually target different processes (e.g. a
+    # browser-driven workflow's service points at a web app, not the same
+    # backend every other service targets), so docker-host.json alone can't
+    # be a correct default for all of them. A same-named
+    # environment/<service>-host.json takes precedence when present; every
+    # workflow still falls back to the single docker-host.json otherwise.
+    environment_dir = Path(__file__).resolve().parents[2] / "environment"
+    for path in (
+        environment_dir / f"{compose_service}-host.json",
+        environment_dir / "docker-host.json",
+    ):
+        value = _read_base_url(path)
+        if value is not None:
+            return value
+    return None
+
+
 def _choose_base_url(workflow: K6Workflow) -> Optional[str]:
     if "BASE_URL" not in workflow.forward_environment:
         return None
-    current = os.environ.get("BASE_URL") or _default_base_url()
+    current = os.environ.get("BASE_URL") or _default_base_url(workflow.compose_service)
     choice = _select([f"Current ({current or 'unset'})", "Custom URL"], "Pick a target:")
     if choice == 1:
         return _prompt("Enter BASE_URL", default=current or "")
