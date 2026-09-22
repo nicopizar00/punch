@@ -331,6 +331,35 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.fake_docker_calls()), 1)
 
+    def test_all_options_shown_even_if_workflow_does_not_forward_every_var(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
+        self.write_options("5-vu-5m", {"VUS": 5, "DURATION": "5m"})
+        with self.select_menu(0, 0, 0, 1):
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("VUS=5", call)
+        # DURATION isn't in this workflow's forward list, so it's dropped at
+        # the compose-run boundary even though the preset stayed selectable.
+        self.assertFalse(any(part.startswith("DURATION=") for part in call))
+
+    def test_options_menu_defaults_cursor_to_5_iterations(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL", "VUS", "ITERATIONS"])
+        self.write_options("1-iteration", {"ITERATIONS": 1})
+        self.write_options("5-iterations", {"ITERATIONS": 5})
+        calls: list[tuple[list[str], int]] = []
+
+        def fake_terminal_menu(entries, *, title, cursor_index=0):
+            calls.append((entries, cursor_index))
+            return _SelectedMenu(0)
+
+        with patch("sys.stdin", _ConfirmedTerminal()):
+            with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
+                rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        options_entries, options_cursor_index = calls[-1]
+        self.assertEqual(options_entries[options_cursor_index], "5-iterations")
+
     def test_canceling_options_menu_does_not_run_workflow(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
         self.write_options("5-vus", {"VUS": 5})

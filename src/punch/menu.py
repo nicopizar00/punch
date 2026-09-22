@@ -49,13 +49,13 @@ class _MenuUnavailable(Exception):
     """The terminal menu could not acquire a controlling terminal."""
 
 
-def _select(entries: List[str], title: str) -> int:
+def _select(entries: List[str], title: str, cursor_index: int = 0) -> int:
     # Compose confirmation reads sys.stdin; never let the picker read /dev/tty
     # while redirected stdin silently disables that confirmation.
     if not sys.stdin.isatty():
         raise _MenuUnavailable
     try:
-        selection = TerminalMenu(entries, title=title).show()
+        selection = TerminalMenu(entries, title=title, cursor_index=cursor_index).show()
     except (OSError, NotImplementedError) as error:
         raise _MenuUnavailable from error
     if selection is None:
@@ -116,6 +116,9 @@ def _load_options_preset(path: Path) -> dict:
     return {str(key): str(value) for key, value in data.items()}
 
 
+_DEFAULT_OPTIONS_PRESET = "5-iterations"
+
+
 def _choose_options(workflow: K6Workflow, options_dir: Path) -> dict:
     extra_names = [name for name in workflow.forward_environment if name != "BASE_URL"]
     if not extra_names:
@@ -124,7 +127,13 @@ def _choose_options(workflow: K6Workflow, options_dir: Path) -> dict:
     if not paths:
         return {}
     entries = ["Skip (use env/default)"] + [path.stem for path in paths]
-    choice = _select(entries, "Load an options preset:")
+    # 5 iterations is the repo-wide default load shape — environment
+    # independent (a fixed op count), unlike a DURATION-based soak whose
+    # throughput varies with how fast the target environment is. Pre-select
+    # it when available; every preset stays choosable regardless of which
+    # vars this workflow forwards.
+    default_index = entries.index(_DEFAULT_OPTIONS_PRESET) if _DEFAULT_OPTIONS_PRESET in entries else 0
+    choice = _select(entries, "Load an options preset:", cursor_index=default_index)
     if choice == 0:
         return {}
     return _load_options_preset(paths[choice - 1])
