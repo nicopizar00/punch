@@ -157,6 +157,41 @@ class LoadWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.forward_environment, ())
         self.assertEqual(workflow.required_environment, ())
         self.assertIsNone(workflow.csv_output)
+        self.assertIsNone(workflow.csv_input)
+
+    def test_loads_a_declared_csv_input(self) -> None:
+        self.write_workflow(
+            self.workflow_path,
+            (
+                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n",
+                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n"
+                "  inputs:\n    csv:\n      path: reports/data/fixture-in.csv\n",
+            ),
+        )
+        workflow = load_workflow(self.workflow_path)
+        self.assertEqual(workflow.csv_input.path, self.root / "reports/data/fixture-in.csv")
+
+    def test_rejects_csv_input_path_without_csv_extension(self) -> None:
+        self.write_workflow(
+            self.workflow_path,
+            (
+                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n",
+                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n"
+                "  inputs:\n    csv:\n      path: reports/data/fixture-in.txt\n",
+            ),
+        )
+        with self.assertRaisesRegex(WorkflowError, "inputs.csv.path must be a .csv file"):
+            load_workflow(self.workflow_path)
+
+    def test_rejects_unknown_inputs_field(self) -> None:
+        self.assertWorkflowError(
+            "unknown field inputs.tsv",
+            (
+                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n",
+                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n"
+                "  inputs:\n    tsv:\n      path: reports/data/fixture-in.csv\n",
+            ),
+        )
 
 
 if __name__ == "__main__":

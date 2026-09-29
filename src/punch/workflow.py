@@ -16,6 +16,11 @@ class CsvOutput:
 
 
 @dataclass(frozen=True)
+class CsvInput:
+    path: Path
+
+
+@dataclass(frozen=True)
 class SummaryOutput:
     path: Path
 
@@ -31,16 +36,18 @@ class K6Workflow:
     forward_environment: tuple[str, ...]
     required_environment: tuple[str, ...]
     csv_output: CsvOutput | None
+    csv_input: CsvInput | None
     summary_output: SummaryOutput | None
 
 
 ROOT_KEYS = {"apiVersion", "kind", "metadata", "spec"}
 METADATA_KEYS = {"name"}
-SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs"}
+SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs", "inputs"}
 COMPOSE_KEYS = {"file", "service"}
 K6_KEYS = {"script"}
 ENVIRONMENT_KEYS = {"forward", "required"}
 OUTPUT_KEYS = {"csv", "summary"}
+INPUT_KEYS = {"csv"}
 CSV_KEYS = {"path"}
 SUMMARY_KEYS = {"path"}
 NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
@@ -51,6 +58,13 @@ def _resolve_beneath(base: Path, raw: str, field: str) -> Path:
     candidate = (base / raw).resolve()
     if candidate != base and base not in candidate.parents:
         raise WorkflowError(f"{field} escapes spec.workingDirectory")
+    return candidate
+
+
+def _resolve_csv_path(base: Path, raw: str, field: str) -> Path:
+    candidate = _resolve_beneath(base, raw, field)
+    if candidate.suffix.lower() != ".csv":
+        raise WorkflowError(f"{field} must be a .csv file")
     return candidate
 
 
@@ -193,6 +207,18 @@ def load_workflow(path: Path) -> K6Workflow:
             )
         )
 
+    inputs = _allowed_keys(spec.get("inputs", {}), INPUT_KEYS, "inputs")
+    csv_input = None
+    if "csv" in inputs:
+        csv_in = _allowed_keys(inputs["csv"], CSV_KEYS, "inputs.csv")
+        csv_input = CsvInput(
+            _resolve_csv_path(
+                working_directory,
+                _string(_required(csv_in, "path", "inputs.csv"), "inputs.csv.path"),
+                "inputs.csv.path",
+            )
+        )
+
     summary_output = None
     if "summary" in outputs:
         summary = _allowed_keys(outputs["summary"], SUMMARY_KEYS, "outputs.summary")
@@ -214,5 +240,6 @@ def load_workflow(path: Path) -> K6Workflow:
         forward_environment=forward_environment,
         required_environment=required_environment,
         csv_output=csv_output,
+        csv_input=csv_input,
         summary_output=summary_output,
     )

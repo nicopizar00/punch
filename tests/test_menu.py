@@ -46,7 +46,7 @@ spec:
     service: {service}
   k6:
     script: /scripts/{name}.js
-{environment}{outputs}
+{environment}{inputs}{outputs}
 """
 
 
@@ -88,6 +88,7 @@ class MenuTests(unittest.TestCase):
         *,
         forward: list[str] | None = None,
         csv_path: str | None = None,
+        csv_input_path: str | None = None,
         service: str = "k6",
     ) -> Path:
         environment = ""
@@ -96,10 +97,13 @@ class MenuTests(unittest.TestCase):
         outputs = ""
         if csv_path:
             outputs = f"  outputs:\n    csv:\n      path: {csv_path}\n"
+        inputs = ""
+        if csv_input_path:
+            inputs = f"  inputs:\n    csv:\n      path: {csv_input_path}\n"
         path = self.root / f"{name}.yaml"
         path.write_text(
             WORKFLOW_TEMPLATE.format(
-                name=name, service=service, environment=environment, outputs=outputs
+                name=name, service=service, environment=environment, inputs=inputs, outputs=outputs
             ),
             encoding="utf-8",
         )
@@ -221,6 +225,27 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
+
+    def test_workflow_menu_annotates_producer_and_consumer_entries(self) -> None:
+        self.write_workflow("cart-fulfill", csv_path="reports/data/cart.csv")
+        self.write_workflow("place-order", csv_input_path="reports/data/cart.csv")
+        self.write_workflow("smoke")
+        calls: list[list[str]] = []
+        results = [_SelectedMenu(0), _SelectedMenu(None)]
+
+        def fake_terminal_menu(entries, *, title, cursor_index=0):
+            calls.append(entries)
+            return results[len(calls) - 1]
+
+        with patch("sys.stdin", _ConfirmedTerminal()):
+            with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
+                rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 2)
+        workflow_entries = calls[1]
+        self.assertIn("cart-fulfill  [produces cart.csv]", workflow_entries)
+        self.assertIn("place-order  [requires cart.csv]", workflow_entries)
+        self.assertIn("smoke", workflow_entries)
 
     def test_monitoring_setup_is_a_stub(self) -> None:
         self.write_workflow("fixture")
@@ -388,6 +413,7 @@ class MenuTests(unittest.TestCase):
                 name="fixture",
                 service="k6",
                 environment="  environment:\n    forward: [BASE_URL, VUS]\n",
+                inputs="",
                 outputs="",
             ),
             encoding="utf-8",

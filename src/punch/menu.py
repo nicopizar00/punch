@@ -63,8 +63,26 @@ def _select(entries: List[str], title: str, cursor_index: int = 0) -> int:
     return selection
 
 
+def _data_annotation(workflow: K6Workflow) -> str:
+    notes = []
+    if workflow.csv_output is not None:
+        notes.append(f"produces {workflow.csv_output.path.name}")
+    if workflow.csv_input is not None:
+        notes.append(f"requires {workflow.csv_input.path.name}")
+    return f"  [{', '.join(notes)}]" if notes else ""
+
+
+def _workflow_menu_label(path: Path) -> str:
+    try:
+        workflow = load_workflow(path)
+    except WorkflowError:
+        return path.stem
+    return path.stem + _data_annotation(workflow)
+
+
 def _choose_workflow(paths: List[Path]) -> Path:
-    return paths[_select([path.stem for path in paths], "Available k6 workflows:")]
+    labels = [_workflow_menu_label(path) for path in paths]
+    return paths[_select(labels, "Available k6 workflows:")]
 
 
 def _read_base_url(path: Path) -> Optional[str]:
