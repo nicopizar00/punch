@@ -159,6 +159,18 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.fake_docker_calls()), 1)
 
+    def test_interrupt_during_workflow_reports_clean_exit(self) -> None:
+        self.write_workflow("fixture")
+        stderr = io.StringIO()
+        with self.select_menu(0, 0):
+            with patch("punch.menu.execute_workflow", side_effect=KeyboardInterrupt):
+                with patch("sys.stderr", stderr):
+                    rc = run_menu(self.root)
+
+        self.assertEqual(rc, 130)
+        self.assertEqual(stderr.getvalue(), "[punch] workflow interrupted.\n")
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_custom_base_url_is_forwarded_to_compose_run(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
         with self.select_menu(0, 0, 1):

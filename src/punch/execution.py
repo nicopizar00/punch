@@ -7,6 +7,8 @@ import signal
 import subprocess
 import sys
 import threading
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -17,6 +19,7 @@ from punch.workflow import K6Workflow
 
 CSV_TAG = "[CSV]"
 PROCESS_STOP_TIMEOUT_SECONDS = 1.0
+INTERRUPT_GRACE_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,8 @@ class ExecutionResult:
 def build_compose_run_command(
     workflow: K6Workflow,
     environment: Mapping[str, str],
+    *,
+    container_name: str | None = None,
 ) -> list[str]:
     command = [
         "docker",
@@ -42,6 +47,8 @@ def build_compose_run_command(
         "run",
         "--rm",
     ]
+    if container_name is not None:
+        command.extend(["--name", container_name])
     for name in workflow.forward_environment:
         if name in environment:
             command.extend(["-e", f"{name}={environment[name]}"])
@@ -195,6 +202,22 @@ def _terminate_and_reap(proc: subprocess.Popen[str]) -> int | None:
     return exit_code
 
 
+def _interrupt_container(container_name: str, environment: Mapping[str, str]) -> bool:
+    """Ask k6 to finish its interrupt lifecycle and emit summary outputs."""
+    try:
+        completed = subprocess.run(
+            ["docker", "kill", "--signal=SIGINT", container_name],
+            env=dict(environment),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=PROCESS_STOP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
 def _close_stream(stream: IO[str]) -> None:
     try:
         stream.close()
@@ -274,6 +297,10 @@ def execute_workflow(
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_file = log_path.open("w", encoding="utf-8")
 
+        container_name = f"punch-{os.getpid()}-{uuid.uuid4().hex[:12]}"
+        command = build_compose_run_command(
+            workflow, environment, container_name=container_name
+        )
         try:
             proc = subprocess.Popen(
                 command,
@@ -309,35 +336,58 @@ def execute_workflow(
         csv_error: str | None = None
         reader_error: str | None = None
         csv_record_count = 0
+        interrupted = False
+        interrupt_deadline: float | None = None
+        interrupt_cleanup_required = False
         while completed_streams < len(readers):
-            stream_name, line = lines.get()
-            if line is None:
-                completed_streams += 1
-                continue
-            if isinstance(line, Exception):
-                if reader_error is None:
-                    reader_error = f"could not read {stream_name}: {line}"
-                break
-
-            destination = output if stream_name == "stdout" else errors
-            destination.write(line)
-            destination.flush()
-            if log_file is not None:
-                log_file.write(line)
-                log_file.flush()
-
-            if stream_name == "stdout" and csv_file is not None and csv_error is None:
-                try:
-                    payload = _csv_payload(line)
-                except (csv.Error, ValueError) as error:
-                    csv_error = str(error)
+            try:
+                if interrupt_deadline is None:
+                    stream_name, line = lines.get()
                 else:
-                    if payload is not None:
-                        csv_file.write(payload + "\n")
-                        csv_file.flush()
-                        csv_record_count += 1
+                    remaining = interrupt_deadline - time.monotonic()
+                    if remaining <= 0:
+                        interrupt_cleanup_required = True
+                        break
+                    stream_name, line = lines.get(timeout=remaining)
+                if line is None:
+                    completed_streams += 1
+                    continue
+                if isinstance(line, Exception):
+                    if reader_error is None:
+                        reader_error = f"could not read {stream_name}: {line}"
+                    break
 
-        if reader_error is not None:
+                destination = output if stream_name == "stdout" else errors
+                destination.write(line)
+                destination.flush()
+                if log_file is not None:
+                    log_file.write(line)
+                    log_file.flush()
+
+                if stream_name == "stdout" and csv_file is not None and csv_error is None:
+                    try:
+                        payload = _csv_payload(line)
+                    except (csv.Error, ValueError) as error:
+                        csv_error = str(error)
+                    else:
+                        if payload is not None:
+                            csv_file.write(payload + "\n")
+                            csv_file.flush()
+                            csv_record_count += 1
+            except queue.Empty:
+                interrupt_cleanup_required = True
+                break
+            except KeyboardInterrupt:
+                if interrupted:
+                    raise
+                interrupted = True
+                if _interrupt_container(container_name, environment):
+                    interrupt_deadline = time.monotonic() + INTERRUPT_GRACE_TIMEOUT_SECONDS
+                else:
+                    interrupt_cleanup_required = True
+                    break
+
+        if reader_error is not None or interrupt_cleanup_required:
             child_exit_code = _terminate_and_reap(proc)
             for reader in readers:
                 reader.join(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
@@ -351,10 +401,15 @@ def execute_workflow(
             for reader in readers:
                 reader.join()
             child_exit_code = proc.wait()
+            if interrupted and _process_group_exists(proc):
+                _signal_process_group(proc, signal.SIGKILL)
             proc = None
         if csv_file is not None:
             csv_file.close()
             csv_file = None
+
+        if interrupted:
+            raise KeyboardInterrupt
 
         if reader_error is not None:
             return _result(

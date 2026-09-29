@@ -214,6 +214,9 @@ def run_menu(workflows_dir: Path, options_dir: Optional[Path] = None) -> int:
     except _MenuUnavailable:
         print("[punch] interactive menu requires a terminal.", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("[punch] workflow interrupted.", file=sys.stderr)
+        return 130
 
 
 def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) -> int:

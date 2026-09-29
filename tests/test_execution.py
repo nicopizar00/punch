@@ -45,8 +45,15 @@ class TtyInput(io.StringIO):
 
 
 class InterruptingOutput(io.StringIO):
+    def __init__(self) -> None:
+        super().__init__()
+        self.interrupted = False
+
     def write(self, value: str) -> int:
-        raise KeyboardInterrupt
+        if not self.interrupted:
+            self.interrupted = True
+            raise KeyboardInterrupt
+        return super().write(value)
 
 
 class ExplodingStream:
@@ -359,10 +366,68 @@ while True:
         else:
             self.fail("descendant process was not terminated")
 
-    def test_output_interrupt_kills_term_ignoring_descendant(self) -> None:
+    def test_output_interrupt_forwards_k6_summary_before_raising(self) -> None:
+        child_pid_path = self.root / "summary-child.pid"
+        container_name_path = self.root / "container-name.txt"
+        kill_args_path = self.root / "summary-kill-args.txt"
+        docker = self.bin_path / "docker"
+        docker.write_text(
+            """#!/usr/bin/env python3
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+child_pid_path = Path(os.environ["CHILD_PID_PATH"])
+if sys.argv[1] == "kill":
+    Path(os.environ["KILL_ARGS_PATH"]).write_text(
+        "\\n".join(sys.argv[1:]), encoding="utf-8"
+    )
+    os.kill(int(child_pid_path.read_text(encoding="utf-8")), signal.SIGINT)
+    raise SystemExit(0)
+
+container_name = sys.argv[sys.argv.index("--name") + 1]
+Path(os.environ["CONTAINER_NAME_PATH"]).write_text(container_name, encoding="utf-8")
+child_pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+def handle_interrupt(_signum, _frame):
+    print("K6 DEFAULT END-OF-TEST SUMMARY", flush=True)
+    raise SystemExit(105)
+
+signal.signal(signal.SIGINT, handle_interrupt)
+print("ordinary output", flush=True)
+time.sleep(30)
+""",
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
+        output = InterruptingOutput()
+
+        with self.assertRaises(KeyboardInterrupt):
+            execute_workflow(
+                self.no_csv_workflow,
+                environment={
+                    **self.env,
+                    "CHILD_PID_PATH": str(child_pid_path),
+                    "CONTAINER_NAME_PATH": str(container_name_path),
+                    "KILL_ARGS_PATH": str(kill_args_path),
+                },
+                output_data_confirmed=False,
+                stdout=output,
+                stderr=io.StringIO(),
+            )
+
+        self.assertIn("K6 DEFAULT END-OF-TEST SUMMARY", output.getvalue())
+        kill_args = kill_args_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(kill_args[:2], ["kill", "--signal=SIGINT"])
+        self.assertEqual(kill_args[2], container_name_path.read_text(encoding="utf-8"))
+
+    def test_stalled_output_interrupt_kills_term_ignoring_descendant(self) -> None:
         child_pid_path = self.root / "interrupt-child.pid"
         descendant_pid_path = self.root / "interrupt-descendant.pid"
         descendant_ready_path = self.root / "interrupt-descendant.ready"
+        kill_args_path = self.root / "interrupt-kill-args.txt"
         docker = self.bin_path / "docker"
         docker.write_text(
             """#!/usr/bin/env python3
@@ -371,6 +436,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+if sys.argv[1] == "kill":
+    Path(os.environ["KILL_ARGS_PATH"]).write_text(
+        "\\n".join(sys.argv[1:]), encoding="utf-8"
+    )
+    raise SystemExit(0)
 
 Path(os.environ[\"CHILD_PID_PATH\"]).write_text(str(os.getpid()), encoding=\"utf-8\")
 descendant_code = (
@@ -393,19 +464,21 @@ time.sleep(30)
         )
         docker.chmod(0o755)
 
-        with self.assertRaises(KeyboardInterrupt):
-            execute_workflow(
-                self.no_csv_workflow,
-                environment={
-                    **self.env,
-                    "CHILD_PID_PATH": str(child_pid_path),
-                    "DESCENDANT_PID_PATH": str(descendant_pid_path),
-                    "DESCENDANT_READY_PATH": str(descendant_ready_path),
-                },
-                output_data_confirmed=False,
-                stdout=InterruptingOutput(),
-                stderr=io.StringIO(),
-            )
+        with patch("punch.execution.INTERRUPT_GRACE_TIMEOUT_SECONDS", 0.05):
+            with self.assertRaises(KeyboardInterrupt):
+                execute_workflow(
+                    self.no_csv_workflow,
+                    environment={
+                        **self.env,
+                        "CHILD_PID_PATH": str(child_pid_path),
+                        "DESCENDANT_PID_PATH": str(descendant_pid_path),
+                        "DESCENDANT_READY_PATH": str(descendant_ready_path),
+                        "KILL_ARGS_PATH": str(kill_args_path),
+                    },
+                    output_data_confirmed=False,
+                    stdout=InterruptingOutput(),
+                    stderr=io.StringIO(),
+                )
 
         self.assertTrue(child_pid_path.exists())
         self.assertTrue(descendant_pid_path.exists())
@@ -424,6 +497,10 @@ time.sleep(30)
         if descendant_survived:
             os.kill(descendant_pid, signal.SIGKILL)
         self.assertFalse(descendant_survived)
+        self.assertEqual(
+            kill_args_path.read_text(encoding="utf-8").splitlines()[:2],
+            ["kill", "--signal=SIGINT"],
+        )
 
     def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
         self.env.pop("BASE_URL")
@@ -433,12 +510,17 @@ time.sleep(30)
         )
         arguments = self.args_path.read_text(encoding="utf-8").splitlines()
         forwarded = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-e"]
+        name_index = arguments.index("--name")
+        self.assertRegex(arguments[name_index + 1], r"^punch-\d+-[0-9a-f]{12}$")
+        arguments_without_internal_name = (
+            arguments[:name_index] + arguments[name_index + 2 :]
+        )
         self.assertTrue(result.passed)
         self.assertEqual(arguments.count("compose"), 1)
         self.assertEqual(arguments.count("run"), 2)
         self.assertEqual(arguments.count("k6"), 1)
         self.assertEqual(
-            arguments,
+            arguments_without_internal_name,
             [
                 "compose",
                 "-f",
