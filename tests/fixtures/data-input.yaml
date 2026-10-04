@@ -1,0 +1,17 @@
+apiVersion: punch/v1
+kind: K6Workflow
+metadata:
+  name: data-consumer
+spec:
+  workingDirectory: .
+  compose:
+    file: docker-compose.yml
+    service: k6
+  k6:
+    script: /scripts/data-consumer.js
+  environment:
+    forward: [BASE_URL]
+  data:
+    directory: data
+    mountedAt: /scripts/data
+    requires: [carts]

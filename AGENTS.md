@@ -45,8 +45,8 @@ Key Patterns and Conventions
 
 - Docker First: do not assume Node or k6 on the host; install Punch's pinned requirements explicitly
 - Execution definitions live in `workflows/k6/*.yaml`; `punch run` does not build images
-- `src/punch/execution.py` owns one Compose launch per workflow, separate stdout/stderr logs, CSV confirmation, and data harvesting
-- Interactive prompting is only for YAML-declared CSV output; CI must pass `--confirm-output-data` for such a workflow
+- `src/punch/execution.py` owns one Compose launch per workflow, separate stdout/stderr logs, dataset harvesting, and consumer preflight (`spec.data`)
+- A dataset is written only when the run opts in with `--produce <dataset>`; interactive prompts are limited to that opt-in and the consumed-data delete prompt
 - Keep the execution chain: TypeScript -> esbuild (in Docker) -> k6 image -> run -> reports
 
 AI Operating Model

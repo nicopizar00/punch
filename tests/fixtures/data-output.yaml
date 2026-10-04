@@ -1,0 +1,21 @@
+apiVersion: punch/v1
+kind: K6Workflow
+metadata:
+  name: data-producer
+spec:
+  workingDirectory: .
+  compose:
+    file: docker-compose.yml
+    service: k6
+  k6:
+    script: /scripts/data-producer.js
+  environment:
+    forward: [BASE_URL, RUN_ID]
+    required: [RUN_ID]
+  data:
+    directory: data
+    mountedAt: /scripts/data
+    produces:
+      - dataset: carts
+        columns: [cartId, productId, sid]
+        targets: [data-consumer]

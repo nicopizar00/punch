@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.execution import (
     build_compose_run_command,
-    confirm_output_data,
     execute_workflow,
 )
 from punch.workflow import load_workflow
@@ -95,14 +94,16 @@ class ExecutionTests(unittest.TestCase):
         self.root = Path(self.temporary_directory.name).resolve()
         fixtures = Path(__file__).resolve().parent / "fixtures"
         shutil.copy(fixtures / "docker-compose.yml", self.root / "docker-compose.yml")
-        shutil.copy(fixtures / "csv-output.yaml", self.root / "csv-output.yaml")
-        self.workflow = load_workflow(self.root / "csv-output.yaml")
+        shutil.copy(fixtures / "data-output.yaml", self.root / "data-output.yaml")
+        shutil.copy(fixtures / "data-input.yaml", self.root / "data-input.yaml")
+        self.workflow = load_workflow(self.root / "data-output.yaml")
+        self.consumer = load_workflow(self.root / "data-input.yaml")
+        self.carts_path = self.root / "data" / "carts.csv"
 
-        no_csv = (self.root / "csv-output.yaml").read_text(encoding="utf-8").replace(
-            "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n", ""
-        )
-        (self.root / "no-csv.yaml").write_text(no_csv, encoding="utf-8")
-        self.no_csv_workflow = load_workflow(self.root / "no-csv.yaml")
+        producer_text = (self.root / "data-output.yaml").read_text(encoding="utf-8")
+        no_data = producer_text[: producer_text.index("  data:\n")]
+        (self.root / "no-data.yaml").write_text(no_data, encoding="utf-8")
+        self.no_csv_workflow = load_workflow(self.root / "no-data.yaml")
 
         self.bin_path = self.root / "bin"
         self.bin_path.mkdir()
@@ -139,151 +140,277 @@ class ExecutionTests(unittest.TestCase):
         self.assertNotIn("SECRET=ignored", command)
         self.assertLess(command.index("BASE_URL=http://target"), command.index("RUN_ID=run-7"))
         self.assertEqual(command.count("k6"), 1)
-        self.assertEqual(command[-3:], ["k6", "run", "/scripts/csv-output.js"])
+        self.assertEqual(command[-3:], ["k6", "run", "/scripts/data-producer.js"])
 
     def test_missing_required_environment_fails_before_subprocess(self) -> None:
-        result = execute_workflow(self.workflow, environment={}, output_data_confirmed=True)
+        result = execute_workflow(self.workflow, environment={}, produce=("carts",))
         self.assertFalse(result.passed)
         self.assertIn("RUN_ID", result.failure)
-        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
         self.assertFalse(self.args_path.exists())
 
-    def test_csv_workflow_requires_confirmation_before_subprocess(self) -> None:
-        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=False)
-        self.assertFalse(result.passed)
-        self.assertIn("confirmation", result.failure)
-        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
-        self.assertFalse(self.args_path.exists())
-
-    def test_interactive_confirmation_names_every_csv_destination(self) -> None:
-        output = io.StringIO()
-        accepted = confirm_output_data(
-            [self.workflow], assume_yes=False, stdin=TtyInput("yes\n"), stdout=output
-        )
-        self.assertTrue(accepted)
-        self.assertIn("csv-fixture", output.getvalue())
-        self.assertIn("fixture.csv", output.getvalue())
-
-    def test_noninteractive_confirmation_requires_explicit_flag(self) -> None:
-        self.assertFalse(
-            confirm_output_data(
-                [self.workflow], assume_yes=False, stdin=io.StringIO("yes\n"), stdout=io.StringIO()
-            )
-        )
-        self.assertTrue(
-            confirm_output_data(
-                [self.workflow], assume_yes=True, stdin=io.StringIO(), stdout=io.StringIO()
-            )
+    def run_producer(self, stdout_lines: list[str], *, produce=("carts",), exit_code: int = 0):
+        env = {**self.env, "FAKE_STDOUT": "|".join(stdout_lines), "FAKE_EXIT_CODE": str(exit_code)}
+        return execute_workflow(
+            self.workflow,
+            environment=env,
+            produce=produce,
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+            log_path=self.log_path,
         )
 
-    def test_harvests_only_stdout_tagged_records_and_publishes_atomically(self) -> None:
-        self.env["FAKE_STDOUT"] = 'ordinary|[CSV] id,name|[CSV] 7,"coffee, dark"'
-        self.env["FAKE_STDERR"] = "[CSV] 99,stderr-must-not-be-data"
-        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
-        self.assertTrue(result.passed)
-        self.assertEqual(result.csv_record_count, 2)
+    def write_previous_carts(self) -> None:
+        self.carts_path.parent.mkdir(parents=True, exist_ok=True)
+        self.carts_path.write_text("cartId,productId,sid\nold,old,old\n", encoding="utf-8")
+
+    def assert_previous_carts_kept(self) -> None:
         self.assertEqual(
-            self.workflow.csv_output.path.read_text(encoding="utf-8"), 'id,name\n7,"coffee, dark"\n'
+            self.carts_path.read_text(encoding="utf-8"), "cartId,productId,sid\nold,old,old\n"
         )
+        leftovers = [p.name for p in self.carts_path.parent.iterdir() if p != self.carts_path]
+        self.assertEqual(leftovers, [])
 
-    def test_declared_csv_with_zero_tagged_lines_fails(self) -> None:
-        self.workflow.csv_output.path.parent.mkdir(parents=True)
-        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
-        self.env["FAKE_STDOUT"] = "ordinary k6 output"
-        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+    def test_opted_in_dataset_is_published_with_header(self) -> None:
+        result = self.run_producer(
+            ["noise", "[DATA carts] c1,p1,s1", '[DATA carts] c2,"p, 2",s2']
+        )
+        self.assertTrue(result.passed, result.failure)
+        self.assertEqual(
+            self.carts_path.read_text(encoding="utf-8"),
+            'cartId,productId,sid\nc1,p1,s1\nc2,"p, 2",s2\n',
+        )
+        self.assertEqual(len(result.datasets), 1)
+        self.assertEqual(result.datasets[0].dataset, "carts")
+        self.assertEqual(result.datasets[0].path, self.carts_path)
+        self.assertEqual(result.datasets[0].record_count, 2)
+        self.assertTrue(result.datasets[0].published)
+
+    def test_not_opted_in_writes_nothing_and_passes(self) -> None:
+        result = self.run_producer(["[DATA carts] c1,p1,s1"], produce=())
+        self.assertTrue(result.passed, result.failure)
+        self.assertFalse(self.carts_path.exists())
+        self.assertEqual(result.datasets, ())
+
+    def test_empty_field_counts_toward_column_count(self) -> None:
+        result = self.run_producer(["[DATA carts] c1,,s1"])
+        self.assertTrue(result.passed, result.failure)
+        self.assertIn("c1,,s1\n", self.carts_path.read_text(encoding="utf-8"))
+
+    def test_wrong_column_count_fails_and_preserves_old_file(self) -> None:
+        self.write_previous_carts()
+        result = self.run_producer(["[DATA carts] c1,p1"])
         self.assertFalse(result.passed)
-        self.assertIn("no [CSV] stdout records", result.failure)
-        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
-        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        self.assertIn('"carts" record has 2 fields, expected 3', result.failure)
+        self.assertFalse(result.datasets[0].published)
+        self.assert_previous_carts_kept()
 
-    def test_malformed_tagged_payload_fails_without_replacing_old_csv(self) -> None:
-        self.workflow.csv_output.path.parent.mkdir(parents=True)
-        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
-        self.env["FAKE_STDOUT"] = '[CSV] id,name|[CSV] "unterminated'
-        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+    def test_malformed_payload_fails_and_preserves_old_file(self) -> None:
+        self.write_previous_carts()
+        result = self.run_producer(["[DATA carts] c1,p1,s1", '[DATA carts] "unterminated'])
         self.assertFalse(result.passed)
-        self.assertIn("invalid CSV output", result.failure)
-        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
-        self.assertEqual(result.csv_record_count, 1)
-        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        self.assertIn("invalid data output", result.failure)
+        self.assertEqual(result.datasets[0].record_count, 1)
+        self.assert_previous_carts_kept()
 
-    def test_nonzero_child_exit_is_propagated_and_partial_csv_is_not_published(self) -> None:
-        self.workflow.csv_output.path.parent.mkdir(parents=True)
-        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
-        self.env.update(FAKE_STDOUT="[CSV] id,name|[CSV] 1,espresso", FAKE_EXIT_CODE="17")
-        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+    def test_undeclared_dataset_tag_fails(self) -> None:
+        result = self.run_producer(["[DATA ghosts] x"])
+        self.assertFalse(result.passed)
+        self.assertIn('undeclared dataset "ghosts"', result.failure)
+
+    def test_undeclared_dataset_tag_fails_even_without_opt_in(self) -> None:
+        result = self.run_producer(["[DATA ghosts] x"], produce=())
+        self.assertFalse(result.passed)
+        self.assertIn('undeclared dataset "ghosts"', result.failure)
+
+    def test_opted_in_dataset_with_zero_rows_fails_and_preserves_old_file(self) -> None:
+        self.write_previous_carts()
+        result = self.run_producer(["no records here"])
+        self.assertFalse(result.passed)
+        self.assertIn("no [DATA carts] records were produced", result.failure)
+        self.assert_previous_carts_kept()
+
+    def test_child_failure_does_not_publish(self) -> None:
+        self.write_previous_carts()
+        result = self.run_producer(["[DATA carts] c1,p1,s1"], exit_code=17)
+        self.assertFalse(result.passed)
         self.assertEqual(result.child_exit_code, 17)
-        self.assertFalse(result.passed)
-        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
-        self.assertEqual(result.csv_record_count, 2)
-        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        self.assertEqual(result.datasets[0].record_count, 1)
+        self.assert_previous_carts_kept()
 
-    def test_csv_log_aliases_fail_before_writes_and_preserve_destination(self) -> None:
-        csv_path = self.workflow.csv_output.path
-        csv_path.parent.mkdir(parents=True)
+    def test_stderr_records_are_never_harvested(self) -> None:
+        env = {
+            **self.env,
+            "FAKE_STDOUT": "[DATA carts] c1,p1,s1",
+            "FAKE_STDERR": "[DATA carts] e,e,e",
+        }
+        result = execute_workflow(
+            self.workflow, environment=env, produce=("carts",),
+            stdout=io.StringIO(), stderr=io.StringIO(),
+        )
+        self.assertTrue(result.passed, result.failure)
+        self.assertNotIn("e,e,e", self.carts_path.read_text(encoding="utf-8"))
+
+    def test_validate_produce_expands_all_and_rejects_unknown(self) -> None:
+        from punch.execution import validate_produce
+        self.assertEqual(validate_produce(self.workflow, ["all"]), ("carts",))
+        self.assertEqual(validate_produce(self.workflow, []), ())
+        self.assertEqual(validate_produce(self.workflow, ["carts", "carts"]), ("carts",))
+        with self.assertRaisesRegex(ValueError, 'data-producer does not produce "orders"'):
+            validate_produce(self.workflow, ["orders"])
+        with self.assertRaisesRegex(ValueError, 'does not produce "carts"'):
+            validate_produce(self.no_csv_workflow, ["carts"])
+
+    def test_unknown_produce_fails_before_subprocess(self) -> None:
+        result = self.run_producer(["[DATA carts] c,p,s"], produce=("orders",))
+        self.assertFalse(result.passed)
+        self.assertIn('does not produce "orders"', result.failure)
+        self.assertFalse(self.args_path.exists())
+
+    def test_data_log_aliases_fail_before_writes_and_preserve_destination(self) -> None:
+        self.write_previous_carts()
         aliases: list[tuple[str, Path]] = [
-            ("lexical", csv_path.parent / "nested" / ".." / csv_path.name),
+            ("lexical", self.carts_path.parent / "nested" / ".." / self.carts_path.name),
         ]
-        csv_path.write_text("previous\n", encoding="utf-8")
-        symlink = self.root / "csv-log-symlink"
-        symlink.symlink_to(csv_path)
+        symlink = self.root / "data-log-symlink"
+        symlink.symlink_to(self.carts_path)
         aliases.append(("symlink", symlink))
-        hardlink = self.root / "csv-log-hardlink"
-        os.link(csv_path, hardlink)
+        hardlink = self.root / "data-log-hardlink"
+        os.link(self.carts_path, hardlink)
         aliases.append(("hardlink", hardlink))
 
         for alias_name, log_path in aliases:
             with self.subTest(alias=alias_name):
                 self.args_path.unlink(missing_ok=True)
-                csv_path.write_text("previous\n", encoding="utf-8")
                 result = execute_workflow(
-                    self.workflow,
-                    environment=self.env,
-                    output_data_confirmed=True,
-                    log_path=log_path,
+                    self.workflow, environment=self.env, produce=("carts",), log_path=log_path
                 )
                 self.assertFalse(result.passed)
                 self.assertIn("collides", result.failure)
-                self.assertEqual(result.csv_path, csv_path)
-                self.assertEqual(csv_path.read_text(encoding="utf-8"), "previous\n")
+                self.assertEqual(
+                    self.carts_path.read_text(encoding="utf-8"),
+                    "cartId,productId,sid\nold,old,old\n",
+                )
                 self.assertFalse(self.args_path.exists())
 
-    def test_csv_log_collision_preserves_destination_when_start_would_fail(self) -> None:
-        csv_path = self.workflow.csv_output.path
-        csv_path.parent.mkdir(parents=True)
-        csv_path.write_text("previous\n", encoding="utf-8")
-
-        with patch("punch.execution.subprocess.Popen", side_effect=OSError("not available")):
-            result = execute_workflow(
-                self.workflow,
-                environment=self.env,
-                output_data_confirmed=True,
-                log_path=csv_path,
-            )
-
-        self.assertFalse(result.passed)
-        self.assertIn("collides", result.failure)
-        self.assertEqual(csv_path.read_text(encoding="utf-8"), "previous\n")
-
-    def test_reader_error_after_csv_record_fails_without_publishing(self) -> None:
-        self.workflow.csv_output.path.parent.mkdir(parents=True)
-        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
-        stdout = ExplodingStream(["[CSV] id,name\n"])
+    def test_reader_error_after_data_record_fails_without_publishing(self) -> None:
+        self.write_previous_carts()
+        stdout = ExplodingStream(["[DATA carts] a,b,c\n"])
         stderr = io.StringIO()
         process = FakeProcess(stdout, stderr)
         with patch("punch.execution.subprocess.Popen", return_value=process):
-            result = execute_workflow(
-                self.workflow, environment=self.env, output_data_confirmed=True
-            )
+            result = execute_workflow(self.workflow, environment=self.env, produce=("carts",))
         self.assertFalse(result.passed)
         self.assertIn("could not read stdout", result.failure)
         self.assertEqual(result.child_exit_code, 0)
-        self.assertEqual(result.csv_record_count, 1)
-        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        self.assertEqual(result.datasets[0].record_count, 1)
+        self.assert_previous_carts_kept()
         self.assertTrue(process.wait_called)
         self.assertTrue(process.terminate_called)
         self.assertTrue(stdout.closed)
         self.assertTrue(stderr.closed)
+
+    def write_carts(self, body: str) -> None:
+        self.carts_path.parent.mkdir(parents=True, exist_ok=True)
+        self.carts_path.write_text(body, encoding="utf-8")
+
+    def run_consumer(self, overrides=None):
+        return execute_workflow(
+            self.consumer,
+            environment=self.env,
+            data_overrides=overrides or {},
+            producers_of=lambda dataset: ("data-producer",),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+        )
+
+    def test_missing_required_file_fails_before_docker_and_names_producers(self) -> None:
+        result = self.run_consumer()
+        self.assertFalse(result.passed)
+        self.assertIsNone(result.child_exit_code)
+        self.assertEqual(
+            result.failure,
+            'data-consumer requires "carts"; produce it with: data-producer (--produce carts)',
+        )
+        self.assertFalse(self.args_path.exists())
+
+    def test_missing_required_file_is_reported_even_when_docker_is_declined(self) -> None:
+        result = execute_workflow(
+            self.consumer, environment=self.env, docker_run_confirmed=False,
+            producers_of=lambda dataset: ("data-producer",),
+        )
+        self.assertIn('requires "carts"', result.failure)
+
+    def test_header_only_file_fails_preflight(self) -> None:
+        self.write_carts("cartId,productId,sid\n\n")
+        result = self.run_consumer()
+        self.assertFalse(result.passed)
+        self.assertIn('requires "carts"', result.failure)
+        self.assertFalse(self.args_path.exists())
+
+    def test_present_file_injects_container_path(self) -> None:
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        result = self.run_consumer()
+        self.assertTrue(result.passed, result.failure)
+        args = self.args_path.read_text(encoding="utf-8").splitlines()
+        self.assertIn("DATA_CARTS_CSV=/scripts/data/carts.csv", args)
+        self.assertLess(args.index("DATA_CARTS_CSV=/scripts/data/carts.csv"), args.index("k6"))
+
+    def test_data_override_points_at_alternate_file(self) -> None:
+        from punch.execution import resolve_data_overrides
+        alt = self.root / "data" / "batch-2.csv"
+        alt.parent.mkdir(parents=True, exist_ok=True)
+        alt.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+        overrides = resolve_data_overrides(self.consumer, ["carts=data/batch-2.csv"])
+        self.assertEqual(overrides, {"carts": alt})
+        result = self.run_consumer(overrides)
+        self.assertTrue(result.passed, result.failure)
+        self.assertIn(
+            "DATA_CARTS_CSV=/scripts/data/batch-2.csv",
+            self.args_path.read_text(encoding="utf-8").splitlines(),
+        )
+
+    def test_data_override_outside_directory_is_rejected(self) -> None:
+        from punch.execution import resolve_data_overrides
+        for raw in ("carts=../x.csv", "carts=/tmp/x.csv", "carts=reports/x.csv", "carts=data"):
+            with self.subTest(raw=raw):
+                with self.assertRaisesRegex(ValueError, "must be beneath spec.data.directory"):
+                    resolve_data_overrides(self.consumer, [raw])
+
+    def test_data_override_rejects_unknown_dataset_and_bad_syntax(self) -> None:
+        from punch.execution import resolve_data_overrides
+        with self.assertRaisesRegex(ValueError, 'data-consumer does not require "orders"'):
+            resolve_data_overrides(self.consumer, ["orders=data/o.csv"])
+        with self.assertRaisesRegex(ValueError, "expected <dataset>=<path>"):
+            resolve_data_overrides(self.consumer, ["carts"])
+
+    def test_delete_prompt_is_skipped_without_a_tty(self) -> None:
+        from punch.execution import confirm_delete_consumed
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        out = io.StringIO()
+        deleted = confirm_delete_consumed(
+            {"carts": self.carts_path}, stdin=io.StringIO("y\n"), stdout=out
+        )
+        self.assertEqual(deleted, [])
+        self.assertTrue(self.carts_path.exists())
+        self.assertEqual(out.getvalue(), "")
+
+    def test_delete_prompt_yes_deletes_on_tty(self) -> None:
+        from punch.execution import confirm_delete_consumed
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        out = io.StringIO()
+        deleted = confirm_delete_consumed({"carts": self.carts_path}, stdin=TtyInput("y\n"), stdout=out)
+        self.assertEqual(deleted, [self.carts_path])
+        self.assertFalse(self.carts_path.exists())
+        self.assertIn('Delete consumed "carts" data', out.getvalue())
+
+    def test_delete_prompt_default_keeps_file(self) -> None:
+        from punch.execution import confirm_delete_consumed
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        deleted = confirm_delete_consumed(
+            {"carts": self.carts_path}, stdin=TtyInput("\n"), stdout=io.StringIO()
+        )
+        self.assertEqual(deleted, [])
+        self.assertTrue(self.carts_path.exists())
 
     def test_reader_decode_error_terminates_backpressured_child_without_publication(self) -> None:
         child_pid_path = self.root / "child.pid"
@@ -302,7 +429,7 @@ descendant = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep
 Path(os.environ[\"DESCENDANT_PID_PATH\"]).write_text(
     str(descendant.pid), encoding=\"utf-8\"
 )
-sys.stdout.buffer.write(b\"[CSV] id,name\\n\")
+sys.stdout.buffer.write(b\"[DATA carts] a,b,c\\n\")
 sys.stdout.buffer.flush()
 time.sleep(0.05)
 sys.stdout.buffer.write(b\"\\xff\")
@@ -314,8 +441,7 @@ while True:
             encoding="utf-8",
         )
         docker.chmod(0o755)
-        self.workflow.csv_output.path.parent.mkdir(parents=True)
-        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
+        self.write_previous_carts()
         result: list[object] = []
 
         worker = threading.Thread(
@@ -327,7 +453,7 @@ while True:
                         "CHILD_PID_PATH": str(child_pid_path),
                         "DESCENDANT_PID_PATH": str(descendant_pid_path),
                     },
-                    output_data_confirmed=True,
+                    produce=("carts",),
                     stdout=io.StringIO(),
                     stderr=io.StringIO(),
                 )
@@ -353,8 +479,8 @@ while True:
         execution = result[0]
         self.assertFalse(execution.passed)
         self.assertIn("could not read stdout", execution.failure)
-        self.assertEqual(execution.csv_record_count, 1)
-        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        self.assertEqual(execution.datasets[0].record_count, 1)
+        self.assert_previous_carts_kept()
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
         for _ in range(100):
@@ -413,7 +539,6 @@ time.sleep(30)
                     "CONTAINER_NAME_PATH": str(container_name_path),
                     "KILL_ARGS_PATH": str(kill_args_path),
                 },
-                output_data_confirmed=False,
                 stdout=output,
                 stderr=io.StringIO(),
             )
@@ -475,7 +600,6 @@ time.sleep(30)
                         "DESCENDANT_READY_PATH": str(descendant_ready_path),
                         "KILL_ARGS_PATH": str(kill_args_path),
                     },
-                    output_data_confirmed=False,
                     stdout=InterruptingOutput(),
                     stderr=io.StringIO(),
                 )
@@ -506,7 +630,7 @@ time.sleep(30)
         self.env.pop("BASE_URL")
         self.env["SECRET"] = "ignored"
         result = execute_workflow(
-            self.no_csv_workflow, environment=self.env, output_data_confirmed=False
+            self.no_csv_workflow, environment=self.env
         )
         arguments = self.args_path.read_text(encoding="utf-8").splitlines()
         forwarded = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-e"]
@@ -531,25 +655,25 @@ time.sleep(30)
                 "RUN_ID=run-7",
                 "k6",
                 "run",
-                "/scripts/csv-output.js",
+                "/scripts/data-producer.js",
             ],
         )
         self.assertNotIn("--project-directory", arguments)
-        self.assertEqual(arguments[-3:], ["k6", "run", "/scripts/csv-output.js"])
+        self.assertEqual(arguments[-3:], ["k6", "run", "/scripts/data-producer.js"])
         self.assertEqual(forwarded, ["RUN_ID=run-7"])
         self.assertNotIn("BASE_URL=http://target", arguments)
         self.assertNotIn("SECRET=ignored", arguments)
 
-    def test_workflow_without_csv_never_prompts_or_harvests(self) -> None:
-        result = execute_workflow(self.no_csv_workflow, environment=self.env, output_data_confirmed=False)
+    def test_workflow_without_data_never_harvests(self) -> None:
+        result = execute_workflow(self.no_csv_workflow, environment=self.env)
         self.assertTrue(result.passed)
-        self.assertIsNone(result.csv_path)
+        self.assertEqual(result.datasets, ())
 
     def test_closes_child_streams_after_streaming(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ResourceWarning)
             result = execute_workflow(
-                self.no_csv_workflow, environment=self.env, output_data_confirmed=False
+                self.no_csv_workflow, environment=self.env
             )
         self.assertTrue(result.passed)
         self.assertEqual(
@@ -563,7 +687,6 @@ time.sleep(30)
         result = execute_workflow(
             self.no_csv_workflow,
             environment=self.env,
-            output_data_confirmed=False,
             stdout=stdout,
             stderr=stderr,
             log_path=self.log_path,
@@ -575,16 +698,14 @@ time.sleep(30)
         self.assertIn("stdout-line", self.log_path.read_text(encoding="utf-8"))
         self.assertIn("stderr-line", self.log_path.read_text(encoding="utf-8"))
 
-    def test_spawn_error_returns_failure_without_csv(self) -> None:
-        self.workflow.csv_output.path.parent.mkdir(parents=True)
-        self.workflow.csv_output.path.write_text("previous\n", encoding="utf-8")
+    def test_spawn_error_returns_failure_without_publishing(self) -> None:
+        self.write_previous_carts()
         self.env["PATH"] = str(self.root / "missing-bin")
-        result = execute_workflow(self.workflow, environment=self.env, output_data_confirmed=True)
+        result = execute_workflow(self.workflow, environment=self.env, produce=("carts",))
         self.assertFalse(result.passed)
         self.assertIsNone(result.child_exit_code)
         self.assertIn("could not start Docker Compose", result.failure)
-        self.assertEqual(result.csv_path, self.workflow.csv_output.path)
-        self.assertEqual(self.workflow.csv_output.path.read_text(encoding="utf-8"), "previous\n")
+        self.assert_previous_carts_kept()
 
 
 if __name__ == "__main__":

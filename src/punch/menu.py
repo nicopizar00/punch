@@ -16,11 +16,15 @@ from typing import List, Optional
 
 from simple_term_menu import TerminalMenu
 
+from punch.catalog import CatalogError, WorkflowCatalog, load_catalog
 from punch.execution import (
     ExecutionResult,
     build_compose_run_command,
+    confirm_delete_consumed,
     confirm_docker_run,
+    data_environment,
     execute_workflow,
+    required_data_paths,
 )
 from punch.workflow import K6Workflow, WorkflowError, load_workflow
 
@@ -63,25 +67,35 @@ def _select(entries: List[str], title: str, cursor_index: int = 0) -> int:
     return selection
 
 
-def _data_annotation(workflow: K6Workflow) -> str:
-    notes = []
-    if workflow.csv_output is not None:
-        notes.append(f"produces {workflow.csv_output.path.name}")
-    if workflow.csv_input is not None:
-        notes.append(f"requires {workflow.csv_input.path.name}")
-    return f"  [{', '.join(notes)}]" if notes else ""
+def _data_annotation(workflow: K6Workflow, catalog: Optional[WorkflowCatalog]) -> str:
+    if workflow.data is None:
+        return ""
+    notes = [
+        f"produces {product.dataset} → {', '.join(product.targets)}"
+        for product in workflow.data.produces
+    ]
+    for dataset in workflow.data.requires:
+        producers = ", ".join(catalog.producers_of(dataset)) if catalog else "?"
+        notes.append(f"requires {dataset} ← {producers}")
+    return f"  [{'; '.join(notes)}]"
 
 
-def _workflow_menu_label(path: Path) -> str:
+def _workflow_menu_labels(paths: List[Path], workflows_dir: Path) -> List[str]:
     try:
-        workflow = load_workflow(path)
-    except WorkflowError:
-        return path.stem
-    return path.stem + _data_annotation(workflow)
+        catalog: Optional[WorkflowCatalog] = load_catalog(workflows_dir)
+    except CatalogError:
+        catalog = None
+    labels = []
+    for path in paths:
+        try:
+            labels.append(path.stem + _data_annotation(load_workflow(path), catalog))
+        except WorkflowError:
+            labels.append(path.stem)
+    return labels
 
 
-def _choose_workflow(paths: List[Path]) -> Path:
-    labels = [_workflow_menu_label(path) for path in paths]
+def _choose_workflow(paths: List[Path], workflows_dir: Path) -> Path:
+    labels = _workflow_menu_labels(paths, workflows_dir)
     return paths[_select(labels, "Available k6 workflows:")]
 
 
@@ -157,14 +171,18 @@ def _choose_options(workflow: K6Workflow, options_dir: Path) -> dict:
     return _load_options_preset(paths[choice - 1])
 
 
-def _choose_confirm_output_data(workflow: K6Workflow) -> bool:
-    if workflow.csv_output is None:
-        return True
-    answer = _prompt(
-        f"Workflow declares CSV output at {workflow.csv_output.path} — write it? (y/N)",
-        default="n",
-    )
-    return answer.lower().startswith("y")
+def _choose_produce(workflow: K6Workflow) -> tuple[str, ...]:
+    if workflow.data is None:
+        return ()
+    chosen = []
+    for product in workflow.data.produces:
+        answer = _prompt(
+            f'Write "{product.dataset}" data for {", ".join(product.targets)}? (y/N)',
+            default="n",
+        )
+        if answer.lower().startswith("y"):
+            chosen.append(product.dataset)
+    return tuple(chosen)
 
 
 def _print_metrics(workflow: K6Workflow) -> None:
@@ -227,23 +245,26 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
         return 1
 
     print()
-    selected = _choose_workflow(paths)
+    selected = _choose_workflow(paths, workflows_dir)
     try:
         workflow = load_workflow(selected)
-    except WorkflowError as error:
+        catalog = load_catalog(workflows_dir)
+    except (WorkflowError, CatalogError) as error:
         print(f"[punch] could not load workflow {selected.stem}: {error}", file=sys.stderr)
         return 1
 
     base_url = _choose_base_url(workflow)
     options = _choose_options(workflow, resolved_options_dir)
-    confirmed = _choose_confirm_output_data(workflow)
+    produce = _choose_produce(workflow)
 
     environment = dict(os.environ)
     if base_url is not None:
         environment["BASE_URL"] = base_url
     environment.update(options)
 
-    command = build_compose_run_command(workflow, environment)
+    command = build_compose_run_command(
+        workflow, environment, data_env=data_environment(workflow, {})
+    )
     docker_run_confirmed = confirm_docker_run(
         command, assume_yes=False, stdin=sys.stdin, stdout=sys.stdout
     )
@@ -252,10 +273,15 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
     result = execute_workflow(
         workflow,
         environment=environment,
-        output_data_confirmed=confirmed,
+        produce=produce,
+        producers_of=catalog.producers_of,
         docker_run_confirmed=docker_run_confirmed,
     )
     rc = _report(workflow, result)
+    if result.child_exit_code is not None:
+        confirm_delete_consumed(
+            required_data_paths(workflow, {}), stdin=sys.stdin, stdout=sys.stdout
+        )
     if result.passed:
         _print_metrics(workflow)
     print()

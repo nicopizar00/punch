@@ -130,7 +130,7 @@ jobs:
           | catalog-gate-report.html | HTML report — catalog read performance gate |
           | order-journey-report.html | HTML report — order create-read journey |
           | smoke.json / catalog-gate.json / order-journey.json | Raw k6 metrics (line-delimited) |
-          | state/punch-run.json | Canonical run evidence — workflow, exit codes, `passed`, `failure`, `csvPath`, `csvRecordCount` |
+          | state/punch-run.json | Canonical run evidence — workflow, exit codes, `passed`, `failure`, `datasets` |
           | Workflow-declared CSV | Optional ordered tag-stripped stdout records; absent from bundled workflows |
           | state/test-context.json | Journey-specific metadata written by `order-journey.ts` |
           | logs/*.log | Docker service logs for debugging |

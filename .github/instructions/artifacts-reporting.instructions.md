@@ -46,9 +46,10 @@ reporting/state code in `src/punch/`), artifact dir
   hashes in filenames — break CI validation lookup.
 - **Don't write secrets into artifacts.** Run evidence and JSON summaries
   must not hold env vars, tokens, or external URLs verbatim.
-- **CSV is opt-in and atomic.** A workflow declares its output path; only
-  ordered, tag-stripped `[CSV]` stdout records form its schema. The producer
-  writes a temporary sibling and publishes it only after success. A prior CSV
+- **Datasets are opt-in and atomic.** A workflow declares datasets and
+  columns in `spec.data`; only `[DATA <dataset>]` stdout records of an
+  opted-in (`--produce`) dataset are written, under a header row. The producer
+  writes a temporary sibling and publishes it only after success. A prior data
   file does not prove the current run succeeded; use current run evidence.
 
 ## When this file activates
@@ -63,8 +64,8 @@ reporting/state code in `src/punch/`), artifact dir
 
 | Artifact | Schema |
 |---|---|
-| `reports/state/punch-run.json` | `{ "command": "run", "tests": [str], "results": [{"test": str, "workflow": str, "exitCode": int, "passed": bool, "failure": str\|null, "csvPath": str\|null, "csvRecordCount": int}], "exitCode": int, "passed": bool, "startedAt": iso8601, "durationSeconds": number }` |
-| Workflow-declared CSV | Ordered, tag-stripped `[CSV]` stdout records at the workflow-configured path; written only on successful execution |
+| `reports/state/punch-run.json` | `{ "command": "run", "tests": [str], "results": [{"test": str, "workflow": str, "exitCode": int, "passed": bool, "failure": str\|null, "datasets": [{"dataset": str, "path": str, "recordCount": int, "published": bool}]}], "exitCode": int, "passed": bool, "startedAt": iso8601, "durationSeconds": number }` |
+| Workflow-declared dataset | Header + ordered `[DATA <dataset>]` stdout records at `<spec.data.directory>/<dataset>.csv`; written only with `--produce` and on successful execution |
 | `reports/state/test-context.json` | `{ "created_order_ids": [str], "created_at": iso8601 }` (see `order-journey.ts` for current shape) |
 | `reports/<test>.html` | Free-form self-contained HTML; structure stable enough to grep for thresholds |
 | `reports/<test>.json` | k6's summary JSON, **filtered** to aggregates (counts, thresholds, durations) — never raw per-iteration data |

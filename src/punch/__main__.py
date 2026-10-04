@@ -192,21 +192,38 @@ def _evidence_result(workflow, result, *, skipped: bool = False) -> dict:
         "childExitCode": result.child_exit_code,
         "passed": result.passed,
         "failure": result.failure,
-        "csvPath": (
-            str(result.csv_path.relative_to(workflow.working_directory))
-            if result.csv_path else None
-        ),
-        "csvRecordCount": result.csv_record_count,
+        "datasets": [
+            {
+                "dataset": dataset.dataset,
+                "path": str(dataset.path.relative_to(workflow.working_directory)),
+                "recordCount": dataset.record_count,
+                "published": dataset.published,
+            }
+            for dataset in result.datasets
+        ],
         **({"skipped": True} if skipped else {}),
     }
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from punch.execution import ExecutionResult, confirm_output_data, execute_workflow, paths_collide
+    from punch.catalog import CatalogError, load_catalog
+    from punch.execution import (
+        ExecutionResult,
+        confirm_delete_consumed,
+        execute_workflow,
+        paths_collide,
+        required_data_paths,
+        resolve_data_overrides,
+        validate_produce,
+    )
     from punch.workflow import WorkflowError
 
     started = datetime.now(timezone.utc).isoformat()
     t0 = time.monotonic()
+    if args.selector == "all" and (args.produce or args.data):
+        print("[punch] --produce and --data apply to one selected workflow, not 'all'",
+              file=sys.stderr, flush=True)
+        return 1
     try:
         workflows = _load_selected_workflows(args.selector)
     except WorkflowError as error:
@@ -222,71 +239,67 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"[punch] SKIP {workflow.name}: {failure}", flush=True)
             results.append(_evidence_result(
                 workflow,
-                ExecutionResult(workflow.name, (), None, True, failure, workflow.csv_output.path if workflow.csv_output else None, 0),
+                ExecutionResult(workflow.name, (), None, True, failure),
                 skipped=True,
             ))
             continue
         runnable.append(workflow)
 
-    csv_paths = [
-        workflow.csv_output.path
-        for workflow in runnable
-        if workflow.csv_output is not None
-    ]
     protected_paths = [STATE_DIR / "punch-run.json"]
     protected_paths.extend(LOGS_DIR / f"k6-{workflow.name}.log" for workflow in runnable)
     if args.collect_logs:
         protected_paths.extend(LOGS_DIR / f"{service}.log" for service in SERVICE_LOG_NAMES)
 
-    for index, csv_path in enumerate(csv_paths):
-        collides_with_artifact = any(paths_collide(csv_path, path) for path in protected_paths)
-        collides_with_csv = any(
-            paths_collide(csv_path, other_path) for other_path in csv_paths[index + 1 :]
-        )
-        if collides_with_artifact or collides_with_csv:
-            print(
-                f"[punch] CSV output collides with another run artifact: {csv_path}",
-                file=sys.stderr,
-                flush=True,
-            )
-            return 1
+    # A dataset aliasing a run artifact would be clobbered (or clobber it)
+    # mid-run; refuse before any Docker call or evidence write.
+    for workflow in runnable:
+        if workflow.data is None:
+            continue
+        try:
+            produce = validate_produce(workflow, args.produce)
+        except ValueError:
+            continue  # reported per workflow below
+        for dataset in produce:
+            destination = workflow.data.host_path(dataset)
+            if any(paths_collide(destination, path) for path in protected_paths):
+                print(
+                    f"[punch] data output collides with another run artifact: {destination}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 1
 
     _ensure_dirs()
 
-    if not confirm_output_data(
-        runnable, assume_yes=args.confirm_output_data, stdin=sys.stdin, stdout=sys.stdout
-    ):
-        print("[punch] CSV output requires --confirm-output-data in noninteractive mode", file=sys.stderr)
-        for workflow in runnable:
-            if workflow.csv_output is not None:
-                results.append(_evidence_result(
-                    workflow,
-                    ExecutionResult(
-                        workflow.name,
-                        (),
-                        None,
-                        False,
-                        "CSV output requires confirmation",
-                        workflow.csv_output.path,
-                        0,
-                    ),
-                ))
-        _write_evidence({
-            "command": "run", "tests": [workflow.name for workflow in workflows], "results": results,
-            "exitCode": 1, "passed": False, "startedAt": started,
-            "durationSeconds": round(time.monotonic() - t0, 2),
-        })
-        return 1
-
     overall_rc = 0
     for workflow in runnable:
+        try:
+            catalog = load_catalog(workflow.source_path.parent)
+            produce = validate_produce(workflow, args.produce)
+            overrides = resolve_data_overrides(workflow, args.data)
+        except (CatalogError, ValueError) as error:
+            print(f"[punch] {error}", file=sys.stderr, flush=True)
+            results.append(_evidence_result(
+                workflow, ExecutionResult(workflow.name, (), None, False, str(error))
+            ))
+            overall_rc = overall_rc or 1
+            if not args.keep_going:
+                break
+            continue
+
         result = execute_workflow(
             workflow,
             environment=os.environ,
-            output_data_confirmed=True,
+            produce=produce,
+            data_overrides=overrides,
+            producers_of=catalog.producers_of,
             log_path=LOGS_DIR / f"k6-{workflow.name}.log",
         )
         results.append(_evidence_result(workflow, result))
+        if result.child_exit_code is not None:
+            confirm_delete_consumed(
+                required_data_paths(workflow, overrides), stdin=sys.stdin, stdout=sys.stdout
+            )
         effective_exit_code = _effective_exit_code(result)
         if not result.passed and overall_rc == 0:
             overall_rc = effective_exit_code
@@ -341,8 +354,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="With 'all', continue subsequent tests after a failure.")
     run_p.add_argument("--collect-logs", action="store_true",
                        help="After the run, dump service logs to reports/logs/.")
-    run_p.add_argument("--confirm-output-data", action="store_true",
-                       help="Allow declared CSV output without an interactive confirmation.")
+    run_p.add_argument("--produce", action="append", default=[], metavar="DATASET",
+                       help="Write a declared dataset (repeatable, or 'all'). Without it no data file is written.")
+    run_p.add_argument("--data", action="append", default=[], metavar="DATASET=PATH",
+                       help="Read a required dataset from PATH (beneath spec.data.directory).")
 
     menu_p = sub.add_parser(
         "menu", help="Interactively pick and run a k6 workflow from a directory."

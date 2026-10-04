@@ -181,11 +181,12 @@ Python CLI reaches feature parity):
   output. `browser-smoke.ts.example` is a deferred placeholder — do not
   build it.
 - `src/punch/` is the Python orchestrator with pinned YAML/menu dependencies. `src/punch/execution.py`
-  owns launch, separate stdout/stderr logs, CSV confirmation, and harvesting;
+  owns launch, separate stdout/stderr logs, dataset harvesting, and consumer
+  preflight; `src/punch/catalog.py` cross-validates `spec.data` links;
   other orchestration is standard-library based. Definitions live in
   `workflows/k6/*.yaml`; one workflow is one Compose run and `punch run` does
-  not build images. CSV prompts apply only to declared output; CI selects CSV
-  workflows with `--confirm-output-data`.
+  not build images. A dataset is written only with `--produce <dataset>`;
+  consumers fail before Docker until their datasets exist.
 - A change is not "done" until `reports/state/punch-run.json` records the
   Test run. See `docs/workflows/validation.md`.
 - Propose changes in small, reviewable steps. Do not implement a full feature

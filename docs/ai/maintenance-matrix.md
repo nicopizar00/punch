@@ -43,7 +43,7 @@ Matrix map change in one area to places reviewers and agents must check/adjust. 
    - YAML execution, CSV, or evidence behavior changes:
      - Update `requirements.txt`, ADR 0005, CI setup, and public prerequisite commands together.
      - Update `workflows/k6/*.yaml`, `src/punch/execution.py` ownership notes, and CSV confirmation guidance together.
-     - Update `punch-run.json` fields (`failure`, `csvPath`, `csvRecordCount`) and the optional CSV artifact contract together; a prior CSV is not current-run evidence.
+     - Update `punch-run.json` fields (`failure`, `datasets`) and the `spec.data` dataset contract together; a prior data file is not current-run evidence.
 
 7) reports/ shape and filenames
    - Report names or content change:

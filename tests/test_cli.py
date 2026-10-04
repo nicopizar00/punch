@@ -36,21 +36,18 @@ raise SystemExit(exit_code)
 """
 
 
-CSV_WORKFLOW = """\
+PLAIN_WORKFLOW = """\
 apiVersion: punch/v1
 kind: K6Workflow
 metadata:
-  name: csv-fixture
+  name: plain-fixture
 spec:
   workingDirectory: .
   compose:
     file: docker-compose.yml
     service: k6
   k6:
-    script: /scripts/csv-fixture.js
-  outputs:
-    csv:
-      path: reports/data/fixture.csv
+    script: /scripts/plain-fixture.js
 """
 
 
@@ -70,11 +67,20 @@ class CliTests(unittest.TestCase):
         docker.write_text(FAKE_DOCKER, encoding="utf-8")
         docker.chmod(0o755)
 
-        shutil.copy(Path(__file__).resolve().parent / "fixtures" / "docker-compose.yml", self.root / "docker-compose.yml")
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        shutil.copy(fixtures / "docker-compose.yml", self.root / "docker-compose.yml")
         self.workflow_path = self.root / "workflow.yaml"
-        self.workflow_path.write_text(CSV_WORKFLOW.replace("  outputs:\n    csv:\n      path: reports/data/fixture.csv\n", ""), encoding="utf-8")
-        self.csv_workflow_path = self.root / "csv-workflow.yaml"
-        self.csv_workflow_path.write_text(CSV_WORKFLOW, encoding="utf-8")
+        self.workflow_path.write_text(PLAIN_WORKFLOW, encoding="utf-8")
+
+        # A separate directory is one catalog: producer + consumer of "carts".
+        self.flows = self.root / "flows"
+        self.flows.mkdir()
+        shutil.copy(fixtures / "docker-compose.yml", self.flows / "docker-compose.yml")
+        shutil.copy(fixtures / "data-output.yaml", self.flows / "data-output.yaml")
+        shutil.copy(fixtures / "data-input.yaml", self.flows / "data-input.yaml")
+        self.producer_path = self.flows / "data-output.yaml"
+        self.consumer_path = self.flows / "data-input.yaml"
+        self.carts_path = self.flows / "data" / "carts.csv"
 
         self.environment = {
             **os.environ,
@@ -97,20 +103,8 @@ class CliTests(unittest.TestCase):
     def configure_fake_exit_sequence(self, exit_codes: list[int]) -> None:
         self.exit_sequence_path.write_text(json.dumps(exit_codes), encoding="utf-8")
 
-    def write_csv_workflow(self, output_path: str) -> None:
-        self.csv_workflow_path.write_text(
-            CSV_WORKFLOW.replace("reports/data/fixture.csv", output_path), encoding="utf-8"
-        )
-
-    def load_workflow(self, name: str, output_path: str | None = None):
-        path = self.root / f"{name}.yaml"
-        workflow = CSV_WORKFLOW.replace("csv-fixture", name)
-        if output_path is None:
-            workflow = workflow.replace("  outputs:\n    csv:\n      path: reports/data/fixture.csv\n", "")
-        else:
-            workflow = workflow.replace("reports/data/fixture.csv", output_path)
-        path.write_text(workflow, encoding="utf-8")
-        return load_workflow(path)
+    def evidence(self) -> dict:
+        return json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
 
     def fake_docker_arguments(self) -> list[str]:
         if not self.args_path.exists():
@@ -135,139 +129,111 @@ class CliTests(unittest.TestCase):
         rc = main(["run", str(self.workflow_path)])
         self.assertEqual(rc, 0)
 
-    def test_csv_path_refuses_noninteractive_run_without_flag(self) -> None:
-        rc = main(["run", str(self.csv_workflow_path)])
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.compose_run_count(), 0)
-        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
-        result = record["results"][0]
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["exitCode"], 1)
-        self.assertIsNone(result["childExitCode"])
-        self.assertEqual(result["workflow"], "csv-workflow.yaml")
-        self.assertEqual(result["csvPath"], "reports/data/fixture.csv")
-        self.assertIn("confirmation", result["failure"])
-
-    def test_confirm_output_data_allows_noninteractive_csv_run(self) -> None:
-        os.environ["FAKE_DOCKER_STDOUT"] = "[CSV] id,name|[CSV] 1,espresso"
-        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
+    def test_produce_flag_publishes_dataset_noninteractively(self) -> None:
+        os.environ["RUN_ID"] = "run-1"
+        os.environ["FAKE_DOCKER_STDOUT"] = "[DATA carts] c,p,s"
+        rc = main(["run", str(self.producer_path), "--produce", "carts"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.compose_run_count(), 1)
-        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
-        result = record["results"][0]
-        self.assertTrue(result["passed"])
-        self.assertEqual(result["csvRecordCount"], 2)
-        self.assertEqual(result["csvPath"], "reports/data/fixture.csv")
         self.assertEqual(
-            (self.root / "reports/data/fixture.csv").read_text(encoding="utf-8"),
-            "id,name\n1,espresso\n",
+            self.carts_path.read_text(encoding="utf-8"), "cartId,productId,sid\nc,p,s\n"
+        )
+        self.assertEqual(
+            self.evidence()["results"][0]["datasets"],
+            [{"dataset": "carts", "path": "data/carts.csv", "recordCount": 1, "published": True}],
         )
 
-    def test_csv_without_tagged_records_fails_with_punch_exit_code(self) -> None:
-        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
-        self.assertEqual(rc, 1)
-        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
-        result = record["results"][0]
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["exitCode"], 1)
-        self.assertEqual(result["childExitCode"], 0)
-        self.assertIn("no [CSV] stdout records", result["failure"])
-        self.assertFalse((self.root / "reports/data/fixture.csv").exists())
+    def test_run_without_produce_writes_no_dataset(self) -> None:
+        os.environ["RUN_ID"] = "run-1"
+        os.environ["FAKE_DOCKER_STDOUT"] = "[DATA carts] c,p,s"
+        rc = main(["run", str(self.producer_path)])
+        self.assertEqual(rc, 0)
+        self.assertFalse(self.carts_path.exists())
+        self.assertEqual(self.evidence()["results"][0]["datasets"], [])
 
-    def test_invalid_csv_fails_with_punch_exit_code(self) -> None:
-        os.environ["FAKE_DOCKER_STDOUT"] = '[CSV] "unterminated'
-        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
+    def test_produce_without_records_fails_with_punch_exit_code(self) -> None:
+        os.environ["RUN_ID"] = "run-1"
+        rc = main(["run", str(self.producer_path), "--produce", "all"])
         self.assertEqual(rc, 1)
-        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
-        result = record["results"][0]
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["exitCode"], 1)
-        self.assertIn("invalid CSV output", result["failure"])
+        result = self.evidence()["results"][0]
+        self.assertEqual(result["childExitCode"], 0)
+        self.assertIn("no [DATA carts] records", result["failure"])
+        self.assertFalse(self.carts_path.exists())
+
+    def test_unknown_produce_dataset_fails_before_docker(self) -> None:
+        os.environ["RUN_ID"] = "run-1"
+        rc = main(["run", str(self.producer_path), "--produce", "orders"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertIn('does not produce "orders"', self.evidence()["results"][0]["failure"])
 
     def test_evidence_distinguishes_nonzero_child_exit_code(self) -> None:
+        os.environ["RUN_ID"] = "run-1"
         self.configure_fake_exit_sequence([17])
-        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
+        rc = main(["run", str(self.producer_path), "--produce", "carts"])
         self.assertEqual(rc, 17)
-        result = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))["results"][0]
+        result = self.evidence()["results"][0]
         self.assertEqual(result["exitCode"], 17)
         self.assertEqual(result["childExitCode"], 17)
 
-    def test_csv_hardlink_to_state_artifact_is_rejected_before_writing(self) -> None:
+    def test_consumer_without_data_names_producer_before_docker(self) -> None:
+        rc = main(["run", str(self.consumer_path)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertIn(
+            "produce it with: data-producer (--produce carts)",
+            self.evidence()["results"][0]["failure"],
+        )
+
+    def test_consumer_with_data_gets_container_path(self) -> None:
+        self.carts_path.parent.mkdir(parents=True)
+        self.carts_path.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+        rc = main(["run", str(self.consumer_path)])
+        self.assertEqual(rc, 0)
+        self.assertIn("DATA_CARTS_CSV=/scripts/data/carts.csv", self.fake_docker_arguments())
+        self.assertTrue(self.carts_path.exists())  # non-interactive never deletes
+
+    def test_data_override_flag_is_forwarded(self) -> None:
+        alt = self.flows / "data" / "alt.csv"
+        alt.parent.mkdir(parents=True)
+        alt.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+        rc = main(["run", str(self.consumer_path), "--data", "carts=data/alt.csv"])
+        self.assertEqual(rc, 0)
+        self.assertIn("DATA_CARTS_CSV=/scripts/data/alt.csv", self.fake_docker_arguments())
+
+    def test_data_override_outside_directory_fails_before_docker(self) -> None:
+        rc = main(["run", str(self.consumer_path), "--data", "carts=../x.csv"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+
+    def test_catalog_error_fails_before_docker(self) -> None:
+        text = self.producer_path.read_text(encoding="utf-8")
+        self.producer_path.write_text(text.replace("[data-consumer]", "[ghost]"), encoding="utf-8")
+        rc = main(["run", str(self.consumer_path)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertIn('targets unknown workflow "ghost"', self.evidence()["results"][0]["failure"])
+
+    def test_dataset_aliasing_the_state_artifact_is_rejected_before_writing(self) -> None:
+        os.environ["RUN_ID"] = "run-1"
         state_path = self.state_dir / "punch-run.json"
         state_path.parent.mkdir(parents=True)
         state_path.write_text("previous state\n", encoding="utf-8")
-        alias_path = self.root / "reports" / "data" / "state-alias.csv"
-        alias_path.parent.mkdir(parents=True)
-        os.link(state_path, alias_path)
-        self.write_csv_workflow("reports/data/state-alias.csv")
-
-        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
-
+        self.carts_path.parent.mkdir(parents=True)
+        self.carts_path.symlink_to(state_path)
+        rc = main(["run", str(self.producer_path), "--produce", "carts"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
         self.assertEqual(state_path.read_text(encoding="utf-8"), "previous state\n")
 
-    def test_csv_symlink_to_workflow_log_is_rejected_before_writing(self) -> None:
-        log_path = self.logs_dir / "k6-csv-fixture.log"
-        log_path.parent.mkdir(parents=True)
-        log_path.write_text("previous log\n", encoding="utf-8")
-        alias_path = self.root / "reports" / "data" / "log-alias.csv"
-        alias_path.parent.mkdir(parents=True)
-        alias_path.symlink_to(log_path)
-        self.write_csv_workflow("reports/data/log-alias.csv")
-
-        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data"])
-
-        self.assertEqual(rc, 1)
+    def test_produce_and_data_are_rejected_with_all(self) -> None:
+        self.assertEqual(main(["run", "all", "--produce", "carts"]), 1)
+        self.assertEqual(main(["run", "all", "--data", "carts=data/x.csv"]), 1)
         self.assertEqual(self.compose_run_count(), 0)
-        self.assertEqual(log_path.read_text(encoding="utf-8"), "previous log\n")
-        self.assertFalse((self.state_dir / "punch-run.json").exists())
 
-    def test_csv_collision_with_another_selected_workflow_log_is_rejected(self) -> None:
-        log_path = self.logs_dir / "k6-second-fixture.log"
-        log_path.parent.mkdir(parents=True)
-        log_path.write_text("previous second log\n", encoding="utf-8")
-        self.write_csv_workflow("logs/k6-second-fixture.log")
-        workflows = [
-            load_workflow(self.csv_workflow_path),
-            self.load_workflow("second-fixture"),
-        ]
-
-        with patch("punch.__main__._load_selected_workflows", return_value=workflows):
-            rc = main(["run", "all", "--confirm-output-data"])
-
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.compose_run_count(), 0)
-        self.assertEqual(log_path.read_text(encoding="utf-8"), "previous second log\n")
-
-    def test_csv_collision_with_collected_service_log_is_rejected(self) -> None:
-        log_path = self.logs_dir / "gateway-api.log"
-        log_path.parent.mkdir(parents=True)
-        log_path.write_text("previous service log\n", encoding="utf-8")
-        self.write_csv_workflow("logs/gateway-api.log")
-
-        rc = main(["run", str(self.csv_workflow_path), "--confirm-output-data", "--collect-logs"])
-
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.compose_run_count(), 0)
-        self.assertEqual(log_path.read_text(encoding="utf-8"), "previous service log\n")
-
-    def test_selected_csv_destinations_that_alias_are_rejected(self) -> None:
-        destination = self.root / "reports" / "data" / "shared.csv"
-        destination.parent.mkdir(parents=True)
-        destination.write_text("previous csv\n", encoding="utf-8")
-        self.write_csv_workflow("reports/data/shared.csv")
-        workflows = [
-            load_workflow(self.csv_workflow_path),
-            self.load_workflow("second-fixture", "reports/data/shared.csv"),
-        ]
-
-        with patch("punch.__main__._load_selected_workflows", return_value=workflows):
-            rc = main(["run", "all", "--confirm-output-data"])
-
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.compose_run_count(), 0)
-        self.assertEqual(destination.read_text(encoding="utf-8"), "previous csv\n")
+    def test_confirm_output_data_flag_is_gone(self) -> None:
+        with self.assertRaises(SystemExit), patch("sys.stderr"):
+            main(["run", "smoke", "--confirm-output-data"])
 
     def test_direct_external_workflow_requires_target_before_run(self) -> None:
         rc = main(["run", "bff-checkout-journey"])
@@ -291,11 +257,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 9)
         self.assertEqual(self.compose_run_count(), 3)
 
-    def test_evidence_records_workflow_and_csv_fields(self) -> None:
+    def test_evidence_records_workflow_and_dataset_fields(self) -> None:
         self.assertEqual(main(["run", "smoke"]), 0)
-        record = json.loads((self.state_dir / "punch-run.json").read_text(encoding="utf-8"))
-        self.assertIn("workflow", record["results"][0])
-        self.assertIn("csvRecordCount", record["results"][0])
+        result = self.evidence()["results"][0]
+        self.assertIn("workflow", result)
+        self.assertEqual(result["datasets"], [])
+        self.assertNotIn("csvRecordCount", result)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ spec:
     service: {service}
   k6:
     script: /scripts/{name}.js
-{environment}{inputs}{outputs}
+{environment}{data}
 """
 
 
@@ -87,24 +87,28 @@ class MenuTests(unittest.TestCase):
         name: str,
         *,
         forward: list[str] | None = None,
-        csv_path: str | None = None,
-        csv_input_path: str | None = None,
+        produces: dict[str, list[str]] | None = None,
+        requires: list[str] | None = None,
         service: str = "k6",
     ) -> Path:
         environment = ""
         if forward:
             environment = "  environment:\n    forward: [" + ", ".join(forward) + "]\n"
-        outputs = ""
-        if csv_path:
-            outputs = f"  outputs:\n    csv:\n      path: {csv_path}\n"
-        inputs = ""
-        if csv_input_path:
-            inputs = f"  inputs:\n    csv:\n      path: {csv_input_path}\n"
+        data = ""
+        if produces or requires:
+            data = "  data:\n    directory: data\n    mountedAt: /scripts/data\n"
+            if produces:
+                data += "    produces:\n"
+                for dataset, targets in produces.items():
+                    data += (
+                        f"      - dataset: {dataset}\n        columns: [id]\n"
+                        f"        targets: [{', '.join(targets)}]\n"
+                    )
+            if requires:
+                data += f"    requires: [{', '.join(requires)}]\n"
         path = self.root / f"{name}.yaml"
         path.write_text(
-            WORKFLOW_TEMPLATE.format(
-                name=name, service=service, environment=environment, inputs=inputs, outputs=outputs
-            ),
+            WORKFLOW_TEMPLATE.format(name=name, service=service, environment=environment, data=data),
             encoding="utf-8",
         )
         return path
@@ -180,24 +184,45 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertIn("BASE_URL=http://example.invalid", call)
 
-    def test_csv_workflow_prompts_for_confirmation(self) -> None:
-        self.write_workflow("fixture", csv_path="reports/data/fixture.csv")
-        with self.select_menu(0, 0):
-            with patch("builtins.input", return_value="n"):
-                rc = run_menu(self.root)
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.fake_docker_calls(), [])
+    def write_pair(self) -> None:
+        self.write_workflow("producer", produces={"orders": ["consumer"]})
+        self.write_workflow("consumer", requires=["orders"])
 
-    def test_confirming_csv_workflow_runs_and_writes_output(self) -> None:
-        self.write_workflow("fixture", csv_path="reports/data/fixture.csv")
-        with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[CSV] id|[CSV] 1"}):
-            with self.select_menu(0, 0):
+    def test_declining_produce_prompt_runs_without_writing_data(self) -> None:
+        self.write_pair()
+        with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
+            with self.select_menu(0, 1):
+                with patch("builtins.input", return_value="n") as prompt:
+                    rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.fake_docker_calls()), 1)
+        self.assertFalse((self.root / "data" / "orders.csv").exists())
+        self.assertIn('Write "orders" data for consumer?', prompt.call_args_list[0].args[0])
+
+    def test_accepting_produce_prompt_writes_dataset(self) -> None:
+        self.write_pair()
+        with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
+            with self.select_menu(0, 1):
                 with patch("builtins.input", return_value="y"):
                     rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(
-            (self.root / "reports/data/fixture.csv").read_text(encoding="utf-8"), "id\n1\n"
+            (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n"
         )
+
+    def test_consumer_without_data_fails_before_docker(self) -> None:
+        self.write_pair()
+        with self.select_menu(0, 0):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.fake_docker_calls(), [])
+
+    def test_broken_catalog_fails_before_docker(self) -> None:
+        self.write_workflow("producer", produces={"orders": ["ghost"]})
+        with self.select_menu(0, 0):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.fake_docker_calls(), [])
 
     def test_current_target_defaults_to_docker_host_json_when_base_url_unset(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
@@ -239,8 +264,8 @@ class MenuTests(unittest.TestCase):
         self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
 
     def test_workflow_menu_annotates_producer_and_consumer_entries(self) -> None:
-        self.write_workflow("cart-fulfill", csv_path="reports/data/cart.csv")
-        self.write_workflow("place-order", csv_input_path="reports/data/cart.csv")
+        self.write_workflow("cart-fulfill", produces={"carts": ["place-order"]})
+        self.write_workflow("place-order", requires=["carts"])
         self.write_workflow("smoke")
         calls: list[list[str]] = []
         results = [_SelectedMenu(0), _SelectedMenu(None)]
@@ -255,8 +280,8 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 2)
         workflow_entries = calls[1]
-        self.assertIn("cart-fulfill  [produces cart.csv]", workflow_entries)
-        self.assertIn("place-order  [requires cart.csv]", workflow_entries)
+        self.assertIn("cart-fulfill  [produces carts → place-order]", workflow_entries)
+        self.assertIn("place-order  [requires carts ← cart-fulfill]", workflow_entries)
         self.assertIn("smoke", workflow_entries)
 
     def test_monitoring_setup_is_a_stub(self) -> None:
@@ -425,8 +450,7 @@ class MenuTests(unittest.TestCase):
                 name="fixture",
                 service="k6",
                 environment="  environment:\n    forward: [BASE_URL, VUS]\n",
-                inputs="",
-                outputs="",
+                data="",
             ),
             encoding="utf-8",
         )

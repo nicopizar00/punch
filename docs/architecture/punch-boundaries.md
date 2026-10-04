@@ -19,7 +19,7 @@ Most "why did this go wrong?" answers map to a boundary crossing.
 ├──────────────────────────────────────────────────────────────┤
 │ Python orchestrator   src/punch/__main__.py + execution.py   │
 │   owns:               argparse, workflow launch, separate    │
-│                       stdout/stderr logs, CSV confirmation,  │
+│                       stdout/stderr logs, dataset preflight, │
 │                       harvesting, exit codes, evidence       │
 │   never owns:         Docker semantics, k6 thresholds, the   │
 │                       HTML report shape                      │
@@ -59,7 +59,7 @@ Most "why did this go wrong?" answers map to a boundary crossing.
 
 Consumer repositories own workflow YAML and k6 scripts. Punch owns the
 reusable `src/punch/` engine, including normalized YAML loading, workflow
-launch, separate stream handling, CSV harvesting, and evidence. This
+launch, separate stream handling, dataset harvesting and preflight, and evidence. This
 repository's `workflows/k6/*.yaml` and k6 files are bundled fixtures/examples;
 they demonstrate the engine and do not make Punch the owner of a consumer's
 workload definitions.
@@ -103,7 +103,7 @@ absorbs the former Define step) is designed to catch these before merge.
    the CI validation job and any downstream consumer. Fix: treat as a
    contract change — Plan must call out the cascade
    (`docs/ai/maintenance-matrix.md`).
-7. **Treating stderr as CSV data.** Only workflow-declared `[CSV]` records on
+7. **Treating stderr as dataset data.** Only workflow-declared `[DATA <dataset>]` records on
    stdout are harvested. Fix: preserve separate streams in
    `src/punch/execution.py`; require confirmation and publish CSV atomically
    only after success.

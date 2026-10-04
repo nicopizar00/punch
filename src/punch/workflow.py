@@ -11,13 +11,31 @@ class WorkflowError(ValueError):
 
 
 @dataclass(frozen=True)
-class CsvOutput:
-    path: Path
+class DataProduct:
+    dataset: str
+    columns: tuple[str, ...]
+    targets: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class CsvInput:
-    path: Path
+class DataSpec:
+    directory: Path
+    mounted_at: str
+    produces: tuple[DataProduct, ...]
+    requires: tuple[str, ...]
+
+    def host_path(self, dataset: str) -> Path:
+        return self.directory / f"{dataset}.csv"
+
+    def container_path(self, dataset: str) -> str:
+        return f"{self.mounted_at.rstrip('/')}/{dataset}.csv"
+
+    def product(self, dataset: str) -> DataProduct | None:
+        return next((p for p in self.produces if p.dataset == dataset), None)
+
+
+def data_env_name(dataset: str) -> str:
+    return f"DATA_{dataset.upper().replace('-', '_')}_CSV"
 
 
 @dataclass(frozen=True)
@@ -35,36 +53,29 @@ class K6Workflow:
     k6_script: str
     forward_environment: tuple[str, ...]
     required_environment: tuple[str, ...]
-    csv_output: CsvOutput | None
-    csv_input: CsvInput | None
+    data: DataSpec | None
     summary_output: SummaryOutput | None
 
 
 ROOT_KEYS = {"apiVersion", "kind", "metadata", "spec"}
 METADATA_KEYS = {"name"}
-SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs", "inputs"}
+SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs", "data"}
 COMPOSE_KEYS = {"file", "service"}
 K6_KEYS = {"script"}
 ENVIRONMENT_KEYS = {"forward", "required"}
-OUTPUT_KEYS = {"csv", "summary"}
-INPUT_KEYS = {"csv"}
-CSV_KEYS = {"path"}
+OUTPUT_KEYS = {"summary"}
+DATA_KEYS = {"directory", "mountedAt", "produces", "requires"}
+PRODUCT_KEYS = {"dataset", "columns", "targets"}
 SUMMARY_KEYS = {"path"}
 NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 ENV_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+COLUMN_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _resolve_beneath(base: Path, raw: str, field: str) -> Path:
     candidate = (base / raw).resolve()
     if candidate != base and base not in candidate.parents:
         raise WorkflowError(f"{field} escapes spec.workingDirectory")
-    return candidate
-
-
-def _resolve_csv_path(base: Path, raw: str, field: str) -> Path:
-    candidate = _resolve_beneath(base, raw, field)
-    if candidate.suffix.lower() != ".csv":
-        raise WorkflowError(f"{field} must be a .csv file")
     return candidate
 
 
@@ -146,6 +157,75 @@ def _environment_names(value: Any, field: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _unique_names(
+    value: Any, field: str, pattern: re.Pattern[str], kind: str
+) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise WorkflowError(f"{field} must be a non-empty list")
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not pattern.fullmatch(item):
+            raise WorkflowError(f"{field} entries must match {pattern.pattern}")
+        if item in names:
+            raise WorkflowError(f"duplicate {kind} in {field}: {item}")
+        names.append(item)
+    return tuple(names)
+
+
+def _data_spec(value: Any, working_directory: Path) -> DataSpec:
+    data = _allowed_keys(value, DATA_KEYS, "spec.data")
+    directory = _resolve_beneath(
+        working_directory,
+        _string(_required(data, "directory", "spec.data"), "spec.data.directory"),
+        "spec.data.directory",
+    )
+    mounted_at = _string(_required(data, "mountedAt", "spec.data"), "spec.data.mountedAt")
+    if not mounted_at.startswith("/"):
+        raise WorkflowError("spec.data.mountedAt must be an absolute container path")
+    if "produces" not in data and "requires" not in data:
+        raise WorkflowError("spec.data must declare produces or requires")
+
+    raw_produces = data.get("produces", [])
+    if not isinstance(raw_produces, list):
+        raise WorkflowError("spec.data.produces must be a list")
+    produces: list[DataProduct] = []
+    for index, raw in enumerate(raw_produces):
+        field = f"spec.data.produces[{index}]"
+        product = _allowed_keys(raw, PRODUCT_KEYS, field)
+        dataset = _string(_required(product, "dataset", field), f"{field}.dataset")
+        if not NAME_PATTERN.fullmatch(dataset):
+            raise WorkflowError(f"{field}.dataset must match {NAME_PATTERN.pattern}")
+        if any(existing.dataset == dataset for existing in produces):
+            raise WorkflowError(f"duplicate dataset in spec.data.produces: {dataset}")
+        produces.append(
+            DataProduct(
+                dataset=dataset,
+                columns=_unique_names(
+                    _required(product, "columns", field), f"{field}.columns", COLUMN_PATTERN, "column"
+                ),
+                targets=_unique_names(
+                    _required(product, "targets", field), f"{field}.targets", NAME_PATTERN, "target"
+                ),
+            )
+        )
+
+    requires: list[str] = []
+    if "requires" in data:
+        raw_requires = data["requires"]
+        if not isinstance(raw_requires, list) or not raw_requires:
+            raise WorkflowError("spec.data.requires must be a non-empty list")
+        for item in raw_requires:
+            if not isinstance(item, str) or not NAME_PATTERN.fullmatch(item):
+                raise WorkflowError(
+                    f"spec.data.requires dataset must match {NAME_PATTERN.pattern}"
+                )
+            if item in requires:
+                raise WorkflowError(f"duplicate dataset in spec.data.requires: {item}")
+            requires.append(item)
+
+    return DataSpec(directory, mounted_at, tuple(produces), tuple(requires))
+
+
 def load_workflow(path: Path) -> K6Workflow:
     source_path = Path(path).resolve()
     try:
@@ -196,28 +276,7 @@ def load_workflow(path: Path) -> K6Workflow:
         raise WorkflowError("environment.required must also appear in environment.forward")
 
     outputs = _allowed_keys(spec.get("outputs", {}), OUTPUT_KEYS, "outputs")
-    csv_output = None
-    if "csv" in outputs:
-        csv = _allowed_keys(outputs["csv"], CSV_KEYS, "outputs.csv")
-        csv_output = CsvOutput(
-            _resolve_beneath(
-                working_directory,
-                _string(_required(csv, "path", "outputs.csv"), "outputs.csv.path"),
-                "csv path",
-            )
-        )
-
-    inputs = _allowed_keys(spec.get("inputs", {}), INPUT_KEYS, "inputs")
-    csv_input = None
-    if "csv" in inputs:
-        csv_in = _allowed_keys(inputs["csv"], CSV_KEYS, "inputs.csv")
-        csv_input = CsvInput(
-            _resolve_csv_path(
-                working_directory,
-                _string(_required(csv_in, "path", "inputs.csv"), "inputs.csv.path"),
-                "inputs.csv.path",
-            )
-        )
+    data = _data_spec(spec["data"], working_directory) if "data" in spec else None
 
     summary_output = None
     if "summary" in outputs:
@@ -239,7 +298,6 @@ def load_workflow(path: Path) -> K6Workflow:
         k6_script=k6_script,
         forward_environment=forward_environment,
         required_environment=required_environment,
-        csv_output=csv_output,
-        csv_input=csv_input,
+        data=data,
         summary_output=summary_output,
     )

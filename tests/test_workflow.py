@@ -25,9 +25,14 @@ spec:
   environment:
     forward: [BASE_URL, RUN_ID]
     required: [RUN_ID]
-  outputs:
-    csv:
-      path: reports/data/fixture.csv
+  data:
+    directory: data
+    mountedAt: /scripts/data
+    produces:
+      - dataset: orders
+        columns: [orderId]
+        targets: [order-status]
+    requires: [carts]
 """
 
 
@@ -42,7 +47,9 @@ class LoadWorkflowTests(unittest.TestCase):
         self.minimal_path.write_text(
             VALID_WORKFLOW.replace(
                 "  environment:\n    forward: [BASE_URL, RUN_ID]\n    required: [RUN_ID]\n"
-                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n",
+                "  data:\n    directory: data\n    mountedAt: /scripts/data\n"
+                "    produces:\n      - dataset: orders\n        columns: [orderId]\n"
+                "        targets: [order-status]\n    requires: [carts]\n",
                 "",
             ),
             encoding="utf-8",
@@ -73,7 +80,17 @@ class LoadWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.k6_script, "/scripts/csv-fixture.js")
         self.assertEqual(workflow.forward_environment, ("BASE_URL", "RUN_ID"))
         self.assertEqual(workflow.required_environment, ("RUN_ID",))
-        self.assertEqual(workflow.csv_output.path, self.root / "reports/data/fixture.csv")
+        data = workflow.data
+        self.assertEqual(data.directory, self.root / "data")
+        self.assertEqual(data.mounted_at, "/scripts/data")
+        self.assertEqual(data.produces[0].dataset, "orders")
+        self.assertEqual(data.produces[0].columns, ("orderId",))
+        self.assertEqual(data.produces[0].targets, ("order-status",))
+        self.assertEqual(data.requires, ("carts",))
+        self.assertEqual(data.host_path("orders"), self.root / "data" / "orders.csv")
+        self.assertEqual(data.container_path("orders"), "/scripts/data/orders.csv")
+        self.assertEqual(data.product("orders").columns, ("orderId",))
+        self.assertIsNone(data.product("carts"))
 
     def test_rejects_unknown_properties(self) -> None:
         self.assertWorkflowError(
@@ -128,13 +145,11 @@ class LoadWorkflowTests(unittest.TestCase):
             ("[RUN_ID]", "[MISSING]"),
         )
 
-    def test_rejects_compose_and_csv_paths_outside_working_directory(self) -> None:
+    def test_rejects_compose_and_data_paths_outside_working_directory(self) -> None:
         self.assertWorkflowError(
             "escapes spec.workingDirectory", ("docker-compose.yml", "../docker-compose.yml")
         )
-        self.assertWorkflowError(
-            "escapes spec.workingDirectory", ("reports/data/fixture.csv", "../fixture.csv")
-        )
+        self.assertWorkflowError("escapes", ("directory: data", "directory: ../outside"))
 
     def test_requires_workflow_file_beneath_working_directory(self) -> None:
         (self.root / "nested").mkdir()
@@ -152,47 +167,87 @@ class LoadWorkflowTests(unittest.TestCase):
             ("/scripts/csv-fixture.js", "scripts/csv-fixture.js"),
         )
 
-    def test_allows_workflow_without_environment_or_outputs(self) -> None:
+    def test_allows_workflow_without_environment_or_data(self) -> None:
         workflow = load_workflow(self.minimal_path)
         self.assertEqual(workflow.forward_environment, ())
         self.assertEqual(workflow.required_environment, ())
-        self.assertIsNone(workflow.csv_output)
-        self.assertIsNone(workflow.csv_input)
+        self.assertIsNone(workflow.data)
 
-    def test_loads_a_declared_csv_input(self) -> None:
-        self.write_workflow(
-            self.workflow_path,
-            (
-                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n",
-                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n"
-                "  inputs:\n    csv:\n      path: reports/data/fixture-in.csv\n",
-            ),
-        )
-        workflow = load_workflow(self.workflow_path)
-        self.assertEqual(workflow.csv_input.path, self.root / "reports/data/fixture-in.csv")
+    def test_data_env_name(self) -> None:
+        from punch.workflow import data_env_name
+        self.assertEqual(data_env_name("orders"), "DATA_ORDERS_CSV")
+        self.assertEqual(data_env_name("cart-items"), "DATA_CART_ITEMS_CSV")
 
-    def test_rejects_csv_input_path_without_csv_extension(self) -> None:
-        self.write_workflow(
-            self.workflow_path,
-            (
-                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n",
-                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n"
-                "  inputs:\n    csv:\n      path: reports/data/fixture-in.txt\n",
-            ),
-        )
-        with self.assertRaisesRegex(WorkflowError, "inputs.csv.path must be a .csv file"):
-            load_workflow(self.workflow_path)
-
-    def test_rejects_unknown_inputs_field(self) -> None:
+    def test_rejects_legacy_csv_output(self) -> None:
         self.assertWorkflowError(
-            "unknown field inputs.tsv",
+            "unknown field outputs.csv",
+            ("  data:\n", "  outputs:\n    csv:\n      path: reports/x.csv\n  data:\n"),
+        )
+
+    def test_rejects_legacy_inputs(self) -> None:
+        self.assertWorkflowError(
+            "unknown field spec.inputs",
+            ("  data:\n", "  inputs:\n    csv:\n      path: data/x.csv\n  data:\n"),
+        )
+
+    def test_rejects_relative_mounted_at(self) -> None:
+        self.assertWorkflowError(
+            "spec.data.mountedAt must be an absolute container path",
+            ("mountedAt: /scripts/data", "mountedAt: scripts/data"),
+        )
+
+    def test_rejects_data_without_produces_or_requires(self) -> None:
+        self.assertWorkflowError(
+            "spec.data must declare produces or requires",
             (
-                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n",
-                "  outputs:\n    csv:\n      path: reports/data/fixture.csv\n"
-                "  inputs:\n    tsv:\n      path: reports/data/fixture-in.csv\n",
+                "    produces:\n      - dataset: orders\n        columns: [orderId]\n"
+                "        targets: [order-status]\n    requires: [carts]\n",
+                "",
             ),
         )
 
+    def test_rejects_invalid_dataset_name(self) -> None:
+        self.assertWorkflowError("dataset must match", ("dataset: orders", "dataset: Orders"))
+
+    def test_rejects_invalid_required_dataset_name(self) -> None:
+        self.assertWorkflowError("requires dataset must match", ("requires: [carts]", "requires: [Carts]"))
+
+    def test_rejects_duplicate_produced_dataset(self) -> None:
+        self.assertWorkflowError(
+            "duplicate dataset in spec.data.produces: orders",
+            (
+                "        targets: [order-status]\n",
+                "        targets: [order-status]\n      - dataset: orders\n"
+                "        columns: [orderId]\n        targets: [order-status]\n",
+            ),
+        )
+
+    def test_rejects_duplicate_required_dataset(self) -> None:
+        self.assertWorkflowError(
+            "duplicate dataset in spec.data.requires: carts",
+            ("requires: [carts]", "requires: [carts, carts]"),
+        )
+
+    def test_rejects_empty_columns(self) -> None:
+        self.assertWorkflowError("columns must be a non-empty list", ("columns: [orderId]", "columns: []"))
+
+    def test_rejects_invalid_column_name(self) -> None:
+        self.assertWorkflowError("columns entries must match", ("columns: [orderId]", "columns: [order-id]"))
+
+    def test_rejects_duplicate_column(self) -> None:
+        self.assertWorkflowError("duplicate column", ("columns: [orderId]", "columns: [orderId, orderId]"))
+
+    def test_rejects_empty_targets(self) -> None:
+        self.assertWorkflowError("targets must be a non-empty list", ("targets: [order-status]", "targets: []"))
+
+    def test_rejects_invalid_target_name(self) -> None:
+        self.assertWorkflowError("targets entries must match", ("targets: [order-status]", "targets: [Order]"))
+
+    def test_rejects_unknown_product_field(self) -> None:
+        self.assertWorkflowError(
+            "unknown field spec.data.produces\\[0\\].path",
+            ("        targets: [order-status]\n", "        targets: [order-status]\n        path: x.csv\n"),
+        )
 
 if __name__ == "__main__":
     unittest.main()

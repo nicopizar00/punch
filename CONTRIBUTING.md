@@ -22,15 +22,15 @@ python3 -m pip install -r requirements.txt
 docker compose build
 ./bin/punch run smoke
 ./bin/punch run path/to/workflow.yaml
-./bin/punch run path/to/csv-workflow.yaml --confirm-output-data
+./bin/punch run path/to/producer.yaml --produce orders
 ```
 
 `punch run` performs one Compose run for each selected YAML workflow and never
-builds images. CSV is optional, declared with a destination by the workflow,
-and published by `src/punch/execution.py` only after success. Its schema is the
-ordered tag-stripped `[CSV]` stdout records; a pre-existing CSV does not prove
-the current run passed. CI must pass `--confirm-output-data` when selecting a
-CSV workflow; bundled workflows do not declare CSV output.
+builds images. Datasets are declared in `spec.data` (see README); a producer
+writes one only with `--produce <dataset>`, published by
+`src/punch/execution.py` only after success, and a consumer is preflighted
+before Docker. A pre-existing data file does not prove the current run passed.
+Bundled workflows declare no data.
 
 ## What to include in PRs
 

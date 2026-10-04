@@ -17,16 +17,44 @@ python3 -m pip install -r requirements.txt
 docker compose build
 ./bin/punch run smoke
 ./bin/punch run path/to/workflow.yaml
-./bin/punch run path/to/csv-workflow.yaml --confirm-output-data
+./bin/punch run path/to/producer.yaml --produce orders
+./bin/punch run path/to/consumer.yaml --data orders=data/batch-2.csv
 ./bin/punch menu path/to/workflows-dir   # interactively pick + run a workflow
 ```
 
 Each YAML definition in `workflows/k6/*.yaml` produces one explicit Compose
-run. CSV output is optional, workflow-declared, and path-configured. When
-declared, `src/punch/execution.py` collects the ordered, tag-stripped `[CSV]`
-stdout records and publishes the CSV only after a successful run. A prior CSV
-file is not evidence that the current run succeeded; inspect the current run
-evidence instead. Bundled workflows do not declare CSV output.
+run.
+
+Workflows exchange data through named datasets declared in `spec.data`:
+
+```yaml
+spec:
+  data:
+    directory: data            # host dir, beneath workingDirectory
+    mountedAt: /scripts/data   # same dir inside the container
+    produces:
+      - dataset: orders
+        columns: [orderId]
+        targets: [order-status]
+    requires: [carts]
+```
+
+- A producer prints `[DATA <dataset>] <csv payload>` on stdout. Rows are
+  written to `<directory>/<dataset>.csv` (with a header) only when the run opts
+  in with `--produce <dataset>` (or `--produce all`), each row has the declared
+  column count, and the run succeeds; the file is published atomically, so a
+  failed run keeps the previous file. Stderr is never harvested.
+- A consumer is preflighted before Docker: each required dataset file must
+  have at least one row, or the run fails naming its producers. Punch injects
+  `DATA_<DATASET>_CSV=<container path>`; `--data <dataset>=<path>` reads an
+  alternate file beneath `directory`. Interactive runs are offered a delete
+  prompt for consumed data; non-interactive runs keep it.
+- Every workflow YAML in one directory forms a catalog. Punch checks that each
+  target exists and requires the dataset, that every required dataset has a
+  producer, and that producers of one dataset agree on columns.
+
+A prior data file is not evidence that the current run succeeded; inspect the
+current run evidence instead. Bundled workflows declare no data.
 
 The legacy bash scripts (`./bin/test-smoke`, `./bin/test-gate`,
 `./bin/test-journey`, `./bin/test-suite`, `./bin/build`, `./bin/clean`)
@@ -84,7 +112,7 @@ reports/
 GitHub Actions uploads all of these as the `performance-suite-reports` artifact. A second CI job downloads the artifact and validates that every expected file is present — demonstrating serialized state transfer between jobs without live containers.
 
 `reports/state/punch-run.json` records per-workflow `exitCode`, `passed`,
-`failure`, `csvPath`, and `csvRecordCount`, plus the overall run outcome and
+`failure` and `datasets`, plus the overall run outcome and
 timing. This is the evidence for the current run.
 
 ## AI-assisted operating model

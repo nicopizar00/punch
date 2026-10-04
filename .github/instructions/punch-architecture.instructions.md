@@ -11,7 +11,7 @@ Scope: **every file**. Always-on architectural contract. Visual layer map: see [
 | Layer | Owns | Lives in |
 |---|---|---|
 | Bash wrapper | route shell calls to Python | `bin/punch`, `bin/*` |
-| Punch engine | reusable YAML loading, launch, streaming, CSV harvesting, evidence | `src/punch/**` |
+| Punch engine | reusable YAML loading, launch, streaming, dataset harvesting and preflight, evidence | `src/punch/**` |
 | Docker Compose | services as runtime boundaries, image names, ports, env, healthchecks, volumes | `docker-compose.yml` |
 | Dockerfiles | how each service built | `docker/*.Dockerfile` |
 | Service code | per-service behavior (gateway / catalog / orders) | `src/services/**` |

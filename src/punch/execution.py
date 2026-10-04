@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -12,14 +13,22 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import IO, Mapping, Sequence
+from typing import IO, Callable, Mapping, Sequence
 
-from punch.workflow import K6Workflow
+from punch.workflow import DataProduct, K6Workflow, data_env_name
 
 
-CSV_TAG = "[CSV]"
+DATA_TAG_PATTERN = re.compile(r"^\[DATA ([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\] ?(.*)$")
 PROCESS_STOP_TIMEOUT_SECONDS = 1.0
 INTERRUPT_GRACE_TIMEOUT_SECONDS = 10.0
+
+
+@dataclass(frozen=True)
+class DatasetResult:
+    dataset: str
+    path: Path
+    record_count: int
+    published: bool
 
 
 @dataclass(frozen=True)
@@ -29,8 +38,7 @@ class ExecutionResult:
     child_exit_code: int | None
     passed: bool
     failure: str | None
-    csv_path: Path | None
-    csv_record_count: int
+    datasets: tuple[DatasetResult, ...] = ()
 
 
 def build_compose_run_command(
@@ -38,6 +46,7 @@ def build_compose_run_command(
     environment: Mapping[str, str],
     *,
     container_name: str | None = None,
+    data_env: Mapping[str, str] | None = None,
 ) -> list[str]:
     command = [
         "docker",
@@ -52,6 +61,8 @@ def build_compose_run_command(
     for name in workflow.forward_environment:
         if name in environment:
             command.extend(["-e", f"{name}={environment[name]}"])
+    for name, value in (data_env or {}).items():
+        command.extend(["-e", f"{name}={value}"])
     command.extend([workflow.compose_service, "run", workflow.k6_script])
     return command
 
@@ -73,41 +84,162 @@ def confirm_docker_run(
     return stdin.readline().strip().lower() in {"y", "yes"}
 
 
-def confirm_output_data(
-    workflows: Sequence[K6Workflow], *, assume_yes: bool, stdin: IO[str], stdout: IO[str]
-) -> bool:
-    csv_workflows = [workflow for workflow in workflows if workflow.csv_output is not None]
-    if not csv_workflows:
-        return True
+def validate_produce(workflow: K6Workflow, produce: Sequence[str]) -> tuple[str, ...]:
+    """Resolve the datasets a run opted into; "all" means every declared one."""
+    declared = tuple(p.dataset for p in workflow.data.produces) if workflow.data else ()
+    if "all" in produce:
+        return declared
+    for dataset in produce:
+        if dataset not in declared:
+            raise ValueError(f'workflow {workflow.name} does not produce "{dataset}"')
+    return tuple(dict.fromkeys(produce))
 
-    for workflow in csv_workflows:
-        assert workflow.csv_output is not None
-        stdout.write(f"{workflow.name}: {workflow.csv_output.path}\n")
-    stdout.flush()
 
-    if assume_yes:
-        return True
-    if not stdin.isatty():
+def resolve_data_overrides(workflow: K6Workflow, raw: Sequence[str]) -> dict[str, Path]:
+    """Parse `<dataset>=<path>` overrides. Paths resolve against the working
+    directory and must stay beneath spec.data.directory — the only host
+    directory the container can see."""
+    overrides: dict[str, Path] = {}
+    for item in raw:
+        dataset, separator, path_text = item.partition("=")
+        if not separator or not dataset or not path_text:
+            raise ValueError(f"invalid --data {item!r}: expected <dataset>=<path>")
+        if workflow.data is None or dataset not in workflow.data.requires:
+            raise ValueError(f'workflow {workflow.name} does not require "{dataset}"')
+        path = (workflow.working_directory / path_text).resolve()
+        directory = workflow.data.directory
+        if directory not in path.parents:
+            raise ValueError(
+                f"--data {dataset} path must be beneath spec.data.directory ({directory})"
+            )
+        overrides[dataset] = path
+    return overrides
+
+
+def required_data_paths(
+    workflow: K6Workflow, overrides: Mapping[str, Path]
+) -> dict[str, Path]:
+    if workflow.data is None:
+        return {}
+    return {
+        dataset: overrides.get(dataset, workflow.data.host_path(dataset))
+        for dataset in workflow.data.requires
+    }
+
+
+def _has_data_rows(path: Path) -> bool:
+    if not path.is_file():
         return False
+    with path.open(encoding="utf-8") as handle:
+        next(handle, None)  # header
+        return any(line.strip() for line in handle)
 
-    stdout.write("Write declared CSV output? [y/N] ")
-    stdout.flush()
-    return stdin.readline().strip().lower() in {"y", "yes"}
+
+def preflight_requirements(
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    producers_of: Callable[[str], Sequence[str]],
+) -> str | None:
+    for dataset, path in required_data_paths(workflow, overrides).items():
+        if not _has_data_rows(path):
+            producers = ", ".join(producers_of(dataset)) or "no known workflow"
+            return (
+                f'{workflow.name} requires "{dataset}"; '
+                f"produce it with: {producers} (--produce {dataset})"
+            )
+    return None
 
 
-def _csv_payload(line: str) -> str | None:
-    record = line.rstrip("\r\n")
-    if not record.startswith(CSV_TAG):
+def data_environment(workflow: K6Workflow, overrides: Mapping[str, Path]) -> dict[str, str]:
+    """Container paths of every required dataset, keyed DATA_<NAME>_CSV."""
+    if workflow.data is None:
+        return {}
+    mounted_at = workflow.data.mounted_at.rstrip("/")
+    return {
+        data_env_name(dataset): f"{mounted_at}/{path.relative_to(workflow.data.directory).as_posix()}"
+        for dataset, path in required_data_paths(workflow, overrides).items()
+    }
+
+
+def confirm_delete_consumed(
+    paths: Mapping[str, Path], *, stdin: IO[str], stdout: IO[str]
+) -> list[Path]:
+    """Offer to delete consumed datasets. Only a real terminal is asked;
+    non-interactive runs never delete."""
+    if not stdin.isatty():
+        return []
+    deleted: list[Path] = []
+    for dataset, path in paths.items():
+        if not path.exists():
+            continue
+        stdout.write(f'Delete consumed "{dataset}" data ({path})? [y/N] ')
+        stdout.flush()
+        if stdin.readline().strip().lower() in {"y", "yes"}:
+            path.unlink()
+            deleted.append(path)
+    return deleted
+
+
+def _data_record(line: str) -> tuple[str, str] | None:
+    match = DATA_TAG_PATTERN.match(line.rstrip("\r\n"))
+    if match is None:
         return None
-    payload = record[len(CSV_TAG) :]
-    if payload.startswith(" "):
-        payload = payload[1:]
-    if not payload:
-        raise ValueError("blank [CSV] payload")
-    parsed = list(csv.reader([payload], strict=True))
-    if len(parsed) != 1:
-        raise ValueError("[CSV] payload must contain one record")
-    return payload
+    return match.group(1), match.group(2)
+
+
+def _check_payload(product: DataProduct, payload: str) -> None:
+    rows = list(csv.reader([payload], strict=True))
+    if len(rows) != 1:
+        raise ValueError(f'"{product.dataset}" payload must contain one record')
+    if len(rows[0]) != len(product.columns):
+        raise ValueError(
+            f'"{product.dataset}" record has {len(rows[0])} fields, '
+            f"expected {len(product.columns)}"
+        )
+
+
+class _DatasetSink:
+    """Header + records in a temp file beside the target; renamed into place
+    only when the whole run succeeds."""
+
+    def __init__(self, product: DataProduct, path: Path) -> None:
+        self.product = product
+        self.path = path
+        self.count = 0
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle: IO[str] | None = NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            delete=False,
+            prefix=f".{product.dataset}-",
+            suffix=".tmp",
+        )
+        self.temp_path = Path(self.handle.name)
+        self.handle.write(",".join(product.columns) + "\n")
+
+    def write(self, payload: str) -> None:
+        assert self.handle is not None
+        self.handle.write(payload + "\n")
+        self.handle.flush()
+        self.count += 1
+
+    def close(self) -> None:
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+
+    def publish(self) -> None:
+        self.close()
+        os.replace(self.temp_path, self.path)
+
+    def discard(self) -> None:
+        self.close()
+        self.temp_path.unlink(missing_ok=True)
+
+    def result(self, published: bool) -> DatasetResult:
+        return DatasetResult(self.product.dataset, self.path, self.count, published)
 
 
 def _result(
@@ -117,8 +249,7 @@ def _result(
     child_exit_code: int | None,
     passed: bool,
     failure: str | None,
-    csv_path: Path | None = None,
-    csv_record_count: int = 0,
+    datasets: tuple[DatasetResult, ...] = (),
 ) -> ExecutionResult:
     return ExecutionResult(
         workflow_name=workflow.name,
@@ -126,8 +257,7 @@ def _result(
         child_exit_code=child_exit_code,
         passed=passed,
         failure=failure,
-        csv_path=csv_path,
-        csv_record_count=csv_record_count,
+        datasets=datasets,
     )
 
 
@@ -229,77 +359,69 @@ def execute_workflow(
     workflow: K6Workflow,
     *,
     environment: Mapping[str, str],
-    output_data_confirmed: bool,
+    produce: Sequence[str] = (),
+    data_overrides: Mapping[str, Path] | None = None,
+    producers_of: Callable[[str], Sequence[str]] = lambda _dataset: (),
     docker_run_confirmed: bool = True,
     stdout: IO[str] | None = None,
     stderr: IO[str] | None = None,
     log_path: Path | None = None,
 ) -> ExecutionResult:
-    command = build_compose_run_command(workflow, environment)
-    csv_path = workflow.csv_output.path if workflow.csv_output is not None else None
+    overrides = dict(data_overrides or {})
+    data_env = data_environment(workflow, overrides)
+    command = build_compose_run_command(workflow, environment, data_env=data_env)
+
+    def fail_before_start(failure: str) -> ExecutionResult:
+        return _result(workflow, command, child_exit_code=None, passed=False, failure=failure)
+
+    try:
+        opted = validate_produce(workflow, produce)
+    except ValueError as error:
+        return fail_before_start(str(error))
+    preflight_failure = preflight_requirements(workflow, overrides, producers_of)
+    if preflight_failure is not None:
+        return fail_before_start(preflight_failure)
     if not docker_run_confirmed:
-        return _result(
-            workflow,
-            command,
-            child_exit_code=None,
-            passed=False,
-            failure="Docker Compose run was not confirmed",
-            csv_path=csv_path,
-        )
+        return fail_before_start("Docker Compose run was not confirmed")
     missing = [name for name in workflow.required_environment if not environment.get(name)]
     if missing:
-        return _result(
-            workflow,
-            command,
-            child_exit_code=None,
-            passed=False,
-            failure=f"missing required environment: {', '.join(missing)}",
-            csv_path=csv_path,
-        )
-    if workflow.csv_output is not None and not output_data_confirmed:
-        return _result(
-            workflow,
-            command,
-            child_exit_code=None,
-            passed=False,
-            failure="CSV output requires confirmation",
-            csv_path=csv_path,
-        )
-    if csv_path is not None and log_path is not None and paths_collide(csv_path, log_path):
-        return _result(
-            workflow,
-            command,
-            child_exit_code=None,
-            passed=False,
-            failure="CSV output collides with log path",
-            csv_path=csv_path,
-        )
+        return fail_before_start(f"missing required environment: {', '.join(missing)}")
+    if log_path is not None and workflow.data is not None:
+        for dataset in opted:
+            if paths_collide(workflow.data.host_path(dataset), log_path):
+                return fail_before_start(f'data output "{dataset}" collides with log path')
 
     output = stdout if stdout is not None else sys.stdout
     errors = stderr if stderr is not None else sys.stderr
-    temp_path: Path | None = None
-    csv_file: IO[str] | None = None
+    sinks: dict[str, _DatasetSink] = {}
     log_file: IO[str] | None = None
     proc: subprocess.Popen[str] | None = None
 
+    def finish(
+        *, child_exit_code: int | None, passed: bool, failure: str | None
+    ) -> ExecutionResult:
+        return _result(
+            workflow,
+            command,
+            child_exit_code=child_exit_code,
+            passed=passed,
+            failure=failure,
+            datasets=tuple(sink.result(passed) for sink in sinks.values()),
+        )
+
     try:
-        if csv_path is not None:
-            csv_path.parent.mkdir(parents=True, exist_ok=True)
-            csv_file = NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                newline="",
-                dir=csv_path.parent,
-                delete=False,
-            )
-            temp_path = Path(csv_file.name)
+        if workflow.data is not None:
+            for dataset in opted:
+                product = workflow.data.product(dataset)
+                assert product is not None
+                sinks[dataset] = _DatasetSink(product, workflow.data.host_path(dataset))
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_file = log_path.open("w", encoding="utf-8")
 
         container_name = f"punch-{os.getpid()}-{uuid.uuid4().hex[:12]}"
         command = build_compose_run_command(
-            workflow, environment, container_name=container_name
+            workflow, environment, container_name=container_name, data_env=data_env
         )
         try:
             proc = subprocess.Popen(
@@ -313,13 +435,10 @@ def execute_workflow(
                 start_new_session=True,
             )
         except OSError as error:
-            return _result(
-                workflow,
-                command,
+            return finish(
                 child_exit_code=None,
                 passed=False,
                 failure=f"could not start Docker Compose: {error}",
-                csv_path=csv_path,
             )
 
         assert proc.stdout is not None
@@ -333,9 +452,8 @@ def execute_workflow(
             reader.start()
 
         completed_streams = 0
-        csv_error: str | None = None
+        data_error: str | None = None
         reader_error: str | None = None
-        csv_record_count = 0
         interrupted = False
         interrupt_deadline: float | None = None
         interrupt_cleanup_required = False
@@ -364,16 +482,20 @@ def execute_workflow(
                     log_file.write(line)
                     log_file.flush()
 
-                if stream_name == "stdout" and csv_file is not None and csv_error is None:
-                    try:
-                        payload = _csv_payload(line)
-                    except (csv.Error, ValueError) as error:
-                        csv_error = str(error)
-                    else:
-                        if payload is not None:
-                            csv_file.write(payload + "\n")
-                            csv_file.flush()
-                            csv_record_count += 1
+                if stream_name == "stdout" and data_error is None:
+                    record = _data_record(line)
+                    if record is not None:
+                        dataset, payload = record
+                        product = workflow.data.product(dataset) if workflow.data else None
+                        if product is None:
+                            data_error = f'undeclared dataset "{dataset}"'
+                        elif dataset in sinks:
+                            try:
+                                _check_payload(product, payload)
+                            except (csv.Error, ValueError) as error:
+                                data_error = str(error)
+                            else:
+                                sinks[dataset].write(payload)
             except queue.Empty:
                 interrupt_cleanup_required = True
                 break
@@ -404,73 +526,40 @@ def execute_workflow(
             if interrupted and _process_group_exists(proc):
                 _signal_process_group(proc, signal.SIGKILL)
             proc = None
-        if csv_file is not None:
-            csv_file.close()
-            csv_file = None
+        for sink in sinks.values():
+            sink.close()
 
         if interrupted:
             raise KeyboardInterrupt
 
         if reader_error is not None:
-            return _result(
-                workflow,
-                command,
-                child_exit_code=child_exit_code,
-                passed=False,
-                failure=reader_error,
-                csv_path=csv_path,
-                csv_record_count=csv_record_count,
-            )
+            return finish(child_exit_code=child_exit_code, passed=False, failure=reader_error)
         if child_exit_code != 0:
-            return _result(
-                workflow,
-                command,
+            return finish(
                 child_exit_code=child_exit_code,
                 passed=False,
                 failure=f"Docker Compose exited with code {child_exit_code}",
-                csv_path=csv_path,
-                csv_record_count=csv_record_count,
             )
-        if csv_error is not None:
-            return _result(
-                workflow,
-                command,
+        if data_error is not None:
+            return finish(
                 child_exit_code=child_exit_code,
                 passed=False,
-                failure=f"invalid CSV output: {csv_error}",
-                csv_path=csv_path,
-                csv_record_count=csv_record_count,
+                failure=f"invalid data output: {data_error}",
             )
-        if csv_path is not None and csv_record_count == 0:
-            return _result(
-                workflow,
-                command,
+        empty = [dataset for dataset, sink in sinks.items() if sink.count == 0]
+        if empty:
+            return finish(
                 child_exit_code=child_exit_code,
                 passed=False,
-                failure="no [CSV] stdout records were produced",
-                csv_path=csv_path,
-                csv_record_count=csv_record_count,
+                failure=f"no [DATA {empty[0]}] records were produced",
             )
-        if csv_path is not None:
-            assert temp_path is not None
-            os.replace(temp_path, csv_path)
-            temp_path = None
-
-        return _result(
-            workflow,
-            command,
-            child_exit_code=child_exit_code,
-            passed=True,
-            failure=None,
-            csv_path=csv_path,
-            csv_record_count=csv_record_count,
-        )
+        for sink in sinks.values():
+            sink.publish()
+        return finish(child_exit_code=child_exit_code, passed=True, failure=None)
     finally:
         if proc is not None:
             _terminate_and_reap(proc)
-        if csv_file is not None:
-            csv_file.close()
+        for sink in sinks.values():
+            sink.discard()
         if log_file is not None:
             log_file.close()
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
