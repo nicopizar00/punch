@@ -412,6 +412,52 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(deleted, [])
         self.assertTrue(self.carts_path.exists())
 
+    def two_dataset_producer(self):
+        text = (self.root / "data-output.yaml").read_text(encoding="utf-8")
+        text = text.replace("name: data-producer", "name: two-producer").rstrip("\n") + (
+            "\n      - dataset: orders\n        columns: [orderId]\n"
+            "        targets: [data-consumer]\n"
+        )
+        (self.root / "two-producer.yaml").write_text(text, encoding="utf-8")
+        return load_workflow(self.root / "two-producer.yaml")
+
+    def test_opted_in_dataset_fails_when_only_another_declared_dataset_has_records(self) -> None:
+        workflow = self.two_dataset_producer()
+        self.write_previous_carts()
+        env = {**self.env, "FAKE_STDOUT": "[DATA orders] ord_1"}
+        result = execute_workflow(
+            workflow, environment=env, produce=("carts",),
+            stdout=io.StringIO(), stderr=io.StringIO(),
+        )
+        self.assertFalse(result.passed)
+        self.assertIn("no [DATA carts] records were produced", result.failure)
+        self.assert_previous_carts_kept()
+        self.assertFalse((self.root / "data" / "orders.csv").exists())
+
+    def test_two_opted_in_datasets_publish_nothing_when_one_is_empty(self) -> None:
+        workflow = self.two_dataset_producer()
+        env = {**self.env, "FAKE_STDOUT": "[DATA orders] ord_1"}
+        result = execute_workflow(
+            workflow, environment=env, produce=("all",),
+            stdout=io.StringIO(), stderr=io.StringIO(),
+        )
+        self.assertFalse(result.passed)
+        self.assertFalse(self.carts_path.exists())
+        self.assertFalse((self.root / "data" / "orders.csv").exists())
+
+    def test_two_opted_in_datasets_publish_together(self) -> None:
+        workflow = self.two_dataset_producer()
+        env = {**self.env, "FAKE_STDOUT": "[DATA carts] c,p,s|[DATA orders] ord_1"}
+        result = execute_workflow(
+            workflow, environment=env, produce=("all",),
+            stdout=io.StringIO(), stderr=io.StringIO(),
+        )
+        self.assertTrue(result.passed, result.failure)
+        self.assertEqual(
+            (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "orderId\nord_1\n"
+        )
+        self.assertEqual([d.record_count for d in result.datasets], [1, 1])
+
     def test_reader_decode_error_terminates_backpressured_child_without_publication(self) -> None:
         child_pid_path = self.root / "child.pid"
         descendant_pid_path = self.root / "descendant.pid"
