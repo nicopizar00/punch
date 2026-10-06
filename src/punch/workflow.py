@@ -23,6 +23,8 @@ class DataSpec:
     mounted_at: str
     produces: tuple[DataProduct, ...]
     requires: tuple[str, ...]
+    # Datasets used when their file has rows, skipped otherwise.
+    optional: tuple[str, ...] = ()
 
     def host_path(self, dataset: str) -> Path:
         return self.directory / f"{dataset}.csv"
@@ -64,7 +66,7 @@ COMPOSE_KEYS = {"file", "service"}
 K6_KEYS = {"script"}
 ENVIRONMENT_KEYS = {"forward", "required"}
 OUTPUT_KEYS = {"summary"}
-DATA_KEYS = {"directory", "mountedAt", "produces", "requires"}
+DATA_KEYS = {"directory", "mountedAt", "produces", "requires", "optional"}
 PRODUCT_KEYS = {"dataset", "columns", "targets"}
 SUMMARY_KEYS = {"path"}
 NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
@@ -172,6 +174,22 @@ def _unique_names(
     return tuple(names)
 
 
+def _dataset_list(data: dict[str, Any], key: str) -> list[str]:
+    if key not in data:
+        return []
+    raw = data[key]
+    if not isinstance(raw, list) or not raw:
+        raise WorkflowError(f"spec.data.{key} must be a non-empty list")
+    names: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not NAME_PATTERN.fullmatch(item):
+            raise WorkflowError(f"spec.data.{key} dataset must match {NAME_PATTERN.pattern}")
+        if item in names:
+            raise WorkflowError(f"duplicate dataset in spec.data.{key}: {item}")
+        names.append(item)
+    return names
+
+
 def _data_spec(value: Any, working_directory: Path) -> DataSpec:
     data = _allowed_keys(value, DATA_KEYS, "spec.data")
     directory = _resolve_beneath(
@@ -182,8 +200,8 @@ def _data_spec(value: Any, working_directory: Path) -> DataSpec:
     mounted_at = _string(_required(data, "mountedAt", "spec.data"), "spec.data.mountedAt")
     if not mounted_at.startswith("/"):
         raise WorkflowError("spec.data.mountedAt must be an absolute container path")
-    if "produces" not in data and "requires" not in data:
-        raise WorkflowError("spec.data must declare produces or requires")
+    if not any(key in data for key in ("produces", "requires", "optional")):
+        raise WorkflowError("spec.data must declare produces, requires, or optional")
 
     raw_produces = data.get("produces", [])
     if not isinstance(raw_produces, list):
@@ -209,21 +227,13 @@ def _data_spec(value: Any, working_directory: Path) -> DataSpec:
             )
         )
 
-    requires: list[str] = []
-    if "requires" in data:
-        raw_requires = data["requires"]
-        if not isinstance(raw_requires, list) or not raw_requires:
-            raise WorkflowError("spec.data.requires must be a non-empty list")
-        for item in raw_requires:
-            if not isinstance(item, str) or not NAME_PATTERN.fullmatch(item):
-                raise WorkflowError(
-                    f"spec.data.requires dataset must match {NAME_PATTERN.pattern}"
-                )
-            if item in requires:
-                raise WorkflowError(f"duplicate dataset in spec.data.requires: {item}")
-            requires.append(item)
+    requires = _dataset_list(data, "requires")
+    optional = _dataset_list(data, "optional")
+    for dataset in optional:
+        if dataset in requires:
+            raise WorkflowError(f"dataset {dataset} is both required and optional")
 
-    return DataSpec(directory, mounted_at, tuple(produces), tuple(requires))
+    return DataSpec(directory, mounted_at, tuple(produces), tuple(requires), tuple(optional))
 
 
 def load_workflow(path: Path) -> K6Workflow:

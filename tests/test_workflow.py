@@ -196,9 +196,9 @@ class LoadWorkflowTests(unittest.TestCase):
             ("mountedAt: /scripts/data", "mountedAt: scripts/data"),
         )
 
-    def test_rejects_data_without_produces_or_requires(self) -> None:
+    def test_rejects_data_without_produces_requires_or_optional(self) -> None:
         self.assertWorkflowError(
-            "spec.data must declare produces or requires",
+            "spec.data must declare produces, requires, or optional",
             (
                 "    produces:\n      - dataset: orders\n        columns: [orderId]\n"
                 "        targets: [order-status]\n    requires: [carts]\n",
@@ -226,6 +226,56 @@ class LoadWorkflowTests(unittest.TestCase):
         self.assertWorkflowError(
             "duplicate dataset in spec.data.requires: carts",
             ("requires: [carts]", "requires: [carts, carts]"),
+        )
+
+    def test_parses_optional_datasets(self) -> None:
+        self.write_workflow(
+            self.workflow_path,
+            ("    requires: [carts]\n", "    requires: [carts]\n    optional: [orders-in, extra]\n"),
+        )
+        workflow = load_workflow(self.workflow_path)
+        self.assertEqual(workflow.data.optional, ("orders-in", "extra"))
+        self.assertEqual(workflow.data.requires, ("carts",))
+
+    def test_optional_alone_is_enough(self) -> None:
+        self.write_workflow(
+            self.workflow_path,
+            (
+                "    produces:\n      - dataset: orders\n        columns: [orderId]\n"
+                "        targets: [order-status]\n    requires: [carts]\n",
+                "    optional: [carts]\n",
+            ),
+        )
+        workflow = load_workflow(self.workflow_path)
+        self.assertEqual(workflow.data.optional, ("carts",))
+        self.assertEqual(workflow.data.requires, ())
+        self.assertEqual(workflow.data.produces, ())
+
+    def test_optional_defaults_to_empty(self) -> None:
+        self.assertEqual(load_workflow(self.workflow_path).data.optional, ())
+
+    def test_rejects_empty_optional(self) -> None:
+        self.assertWorkflowError(
+            "spec.data.optional must be a non-empty list",
+            ("    requires: [carts]\n", "    requires: [carts]\n    optional: []\n"),
+        )
+
+    def test_rejects_invalid_optional_dataset_name(self) -> None:
+        self.assertWorkflowError(
+            "optional dataset must match",
+            ("    requires: [carts]\n", "    requires: [carts]\n    optional: [Bad]\n"),
+        )
+
+    def test_rejects_duplicate_optional_dataset(self) -> None:
+        self.assertWorkflowError(
+            "duplicate dataset in spec.data.optional: extra",
+            ("    requires: [carts]\n", "    requires: [carts]\n    optional: [extra, extra]\n"),
+        )
+
+    def test_rejects_dataset_both_required_and_optional(self) -> None:
+        self.assertWorkflowError(
+            "dataset carts is both required and optional",
+            ("    requires: [carts]\n", "    requires: [carts]\n    optional: [carts]\n"),
         )
 
     def test_rejects_empty_columns(self) -> None:
