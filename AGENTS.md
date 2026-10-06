@@ -21,7 +21,7 @@ Tech Stack
 - k6 (execution) — tests written in TypeScript and bundled with esbuild during Docker image build
 - TypeScript/Node (build only inside Docker)
 - Docker Compose for local orchestration
-- Python 3 + pinned PyYAML for workflow loading and simple-term-menu for interactive selection; other orchestration logic is standard-library based
+- Python 3 + pinned PyYAML for workflow loading and simple-term-menu + rich for the interactive menu; other orchestration logic is standard-library based
 - Postgres 16 for orders persistence
 
 Build & Run

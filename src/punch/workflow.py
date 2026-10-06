@@ -57,10 +57,11 @@ class K6Workflow:
     required_environment: tuple[str, ...]
     data: DataSpec | None
     summary_output: SummaryOutput | None
+    description: str = ""
 
 
 ROOT_KEYS = {"apiVersion", "kind", "metadata", "spec"}
-METADATA_KEYS = {"name"}
+METADATA_KEYS = {"name", "description"}
 SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs", "data"}
 COMPOSE_KEYS = {"file", "service"}
 K6_KEYS = {"script"}
@@ -253,6 +254,9 @@ def load_workflow(path: Path) -> K6Workflow:
     name = _string(_required(metadata, "name", "metadata"), "metadata.name")
     if not NAME_PATTERN.fullmatch(name):
         raise WorkflowError(f"metadata.name must match {NAME_PATTERN.pattern}")
+    description = (
+        _string(metadata["description"], "metadata.description") if "description" in metadata else ""
+    )
 
     spec = _allowed_keys(_required(root, "spec", "root"), SPEC_KEYS, "spec")
     working_directory_raw = _string(
@@ -310,4 +314,5 @@ def load_workflow(path: Path) -> K6Workflow:
         required_environment=required_environment,
         data=data,
         summary_output=summary_output,
+        description=description,
     )

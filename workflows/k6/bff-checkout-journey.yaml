@@ -2,6 +2,7 @@ apiVersion: punch/v1
 kind: K6Workflow
 metadata:
   name: bff-checkout-journey
+  description: Catalog, cart, checkout, and order read through a BFF.
 spec:
   workingDirectory: ../..
   compose:

@@ -2,6 +2,7 @@ apiVersion: punch/v1
 kind: K6Workflow
 metadata:
   name: smoke
+  description: Health checks across gateway, catalog, and orders.
 spec:
   workingDirectory: ../..
   compose:

@@ -2,6 +2,7 @@ apiVersion: punch/v1
 kind: K6Workflow
 metadata:
   name: gate
+  description: Catalog product lookup threshold gate.
 spec:
   workingDirectory: ../..
   compose:

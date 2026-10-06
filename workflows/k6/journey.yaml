@@ -2,6 +2,7 @@ apiVersion: punch/v1
 kind: K6Workflow
 metadata:
   name: journey
+  description: Create an order and read it back.
 spec:
   workingDirectory: ../..
   compose:

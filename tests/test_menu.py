@@ -38,7 +38,7 @@ WORKFLOW_TEMPLATE = """\
 apiVersion: punch/v1
 kind: K6Workflow
 metadata:
-  name: {name}
+  name: {name}{description}
 spec:
   workingDirectory: .
   compose:
@@ -90,6 +90,7 @@ class MenuTests(unittest.TestCase):
         produces: dict[str, list[str]] | None = None,
         requires: list[str] | None = None,
         service: str = "k6",
+        description: str | None = None,
     ) -> Path:
         environment = ""
         if forward:
@@ -108,7 +109,13 @@ class MenuTests(unittest.TestCase):
                 data += f"    requires: [{', '.join(requires)}]\n"
         path = self.root / f"{name}.yaml"
         path.write_text(
-            WORKFLOW_TEMPLATE.format(name=name, service=service, environment=environment, data=data),
+            WORKFLOW_TEMPLATE.format(
+                name=name,
+                description=f"\n  description: {description}" if description else "",
+                service=service,
+                environment=environment,
+                data=data,
+            ),
             encoding="utf-8",
         )
         return path
@@ -263,8 +270,10 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
 
-    def test_workflow_menu_annotates_producer_and_consumer_entries(self) -> None:
-        self.write_workflow("cart-fulfill", produces={"carts": ["place-order"]})
+    def test_workflow_menu_shows_rich_table_and_selects_by_id(self) -> None:
+        self.write_workflow(
+            "cart-fulfill", produces={"carts": ["place-order"]}, description="Fills carts."
+        )
         self.write_workflow("place-order", requires=["carts"])
         self.write_workflow("smoke")
         calls: list[list[str]] = []
@@ -274,15 +283,18 @@ class MenuTests(unittest.TestCase):
             calls.append(entries)
             return results[len(calls) - 1]
 
-        with patch("sys.stdin", _ConfirmedTerminal()):
+        output = io.StringIO()
+        with patch("sys.stdin", _ConfirmedTerminal()), patch("sys.stdout", output):
             with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
                 rc = run_menu(self.root)
         self.assertEqual(rc, 0)
-        self.assertEqual(len(calls), 2)
-        workflow_entries = calls[1]
-        self.assertIn("cart-fulfill  [produces carts → place-order]", workflow_entries)
-        self.assertIn("place-order  [requires carts ← cart-fulfill]", workflow_entries)
-        self.assertIn("smoke", workflow_entries)
+        self.assertEqual(calls[1], ["cart-fulfill", "place-order", "smoke"])
+        table = output.getvalue()
+        for header in ("ID", "Description", "Required Input", "Generated Output"):
+            self.assertIn(header, table)
+        self.assertIn("Fills carts.", table)
+        self.assertIn("carts → place-order", table)
+        self.assertIn("carts ← cart-fulfill", table)
 
     def test_monitoring_setup_is_a_stub(self) -> None:
         self.write_workflow("fixture")
@@ -448,6 +460,7 @@ class MenuTests(unittest.TestCase):
         (workflows_dir / "fixture.yaml").write_text(
             WORKFLOW_TEMPLATE.format(
                 name="fixture",
+                description="",
                 service="k6",
                 environment="  environment:\n    forward: [BASE_URL, VUS]\n",
                 data="",

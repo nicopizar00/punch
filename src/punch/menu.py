@@ -14,6 +14,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
 from simple_term_menu import TerminalMenu
 
 from punch.catalog import CatalogError, WorkflowCatalog, load_catalog
@@ -67,36 +70,53 @@ def _select(entries: List[str], title: str, cursor_index: int = 0) -> int:
     return selection
 
 
-def _data_annotation(workflow: K6Workflow, catalog: Optional[WorkflowCatalog]) -> str:
+def _required_input(workflow: K6Workflow, catalog: Optional[WorkflowCatalog]) -> str:
     if workflow.data is None:
-        return ""
-    notes = [
-        f"produces {product.dataset} → {', '.join(product.targets)}"
-        for product in workflow.data.produces
-    ]
-    for dataset in workflow.data.requires:
+        return "—"
+    lines = []
+    for dataset in workflow.data.requires + workflow.data.optional:
         producers = ", ".join(catalog.producers_of(dataset)) if catalog else "?"
-        notes.append(f"requires {dataset} ← {producers}")
-    return f"  [{'; '.join(notes)}]"
+        optional = " (optional)" if dataset in workflow.data.optional else ""
+        lines.append(f"{dataset}{optional} ← {producers}")
+    return "\n".join(lines) or "—"
 
 
-def _workflow_menu_labels(paths: List[Path], workflows_dir: Path) -> List[str]:
+def _generated_output(workflow: K6Workflow) -> str:
+    if workflow.data is None or not workflow.data.produces:
+        return "—"
+    return "\n".join(
+        f"{product.dataset} → {', '.join(product.targets)}" for product in workflow.data.produces
+    )
+
+
+def _workflow_table(paths: List[Path], workflows_dir: Path) -> Table:
     try:
         catalog: Optional[WorkflowCatalog] = load_catalog(workflows_dir)
     except CatalogError:
         catalog = None
-    labels = []
+    table = Table(title="Available k6 workflows", title_justify="left")
+    table.add_column("ID", style="bold cyan", no_wrap=True)
+    table.add_column("Description")
+    table.add_column("Required Input")
+    table.add_column("Generated Output")
     for path in paths:
         try:
-            labels.append(path.stem + _data_annotation(load_workflow(path), catalog))
-        except WorkflowError:
-            labels.append(path.stem)
-    return labels
+            workflow = load_workflow(path)
+        except WorkflowError as error:
+            table.add_row(path.stem, f"[red]invalid: {escape(str(error))}[/red]", "—", "—")
+            continue
+        table.add_row(
+            path.stem,
+            escape(workflow.description) or "—",
+            _required_input(workflow, catalog),
+            _generated_output(workflow),
+        )
+    return table
 
 
 def _choose_workflow(paths: List[Path], workflows_dir: Path) -> Path:
-    labels = _workflow_menu_labels(paths, workflows_dir)
-    return paths[_select(labels, "Available k6 workflows:")]
+    Console().print(_workflow_table(paths, workflows_dir))
+    return paths[_select([path.stem for path in paths], "Select a workflow:")]
 
 
 def _read_base_url(path: Path) -> Optional[str]:

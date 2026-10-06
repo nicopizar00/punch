@@ -23,7 +23,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
 - **TypeScript** — author tests with types and editor support.
 - **esbuild** — bundles TypeScript to one ES module per test file. Runs inside the Docker build stage; not required on the host.
 - **Docker / Docker Compose** — primary interface. Multi-stage build handles bundling and execution.
-- **Python 3 + pinned PyYAML and simple-term-menu** — thin orchestration façade at `bin/punch` (entry point) and `src/punch/` (CLI module). Docker, Python 3.10+, and pinned requirements are host prerequisites; outside YAML loading and interactive selection, orchestration stays standard-library based.
+- **Python 3 + pinned PyYAML, simple-term-menu, and rich** — thin orchestration façade at `bin/punch` (entry point) and `src/punch/` (CLI module). Docker, Python 3.10+, and pinned requirements are host prerequisites; outside YAML loading and the interactive menu, orchestration stays standard-library based.
 - **GitHub Actions** — builds, runs the full test suite, collects artifacts, validates artifact transfer between jobs.
 - **Postgres 16** — persistence for the orders reference service. Schema seeded via `docker/postgres/init.sql`.
 - **pg** — Postgres client used only by `orders-api`, installed inside its Docker image.

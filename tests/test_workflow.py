@@ -172,6 +172,20 @@ class LoadWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.forward_environment, ())
         self.assertEqual(workflow.required_environment, ())
         self.assertIsNone(workflow.data)
+        self.assertEqual(workflow.description, "")
+
+    def test_reads_optional_metadata_description(self) -> None:
+        self.write_workflow(
+            self.workflow_path,
+            ("  name: csv-fixture\n", "  name: csv-fixture\n  description: Writes orders.\n"),
+        )
+        self.assertEqual(load_workflow(self.workflow_path).description, "Writes orders.")
+
+    def test_rejects_empty_metadata_description(self) -> None:
+        self.assertWorkflowError(
+            "metadata.description must be a non-empty string",
+            ("  name: csv-fixture\n", "  name: csv-fixture\n  description: ''\n"),
+        )
 
     def test_data_env_name(self) -> None:
         from punch.workflow import data_env_name
