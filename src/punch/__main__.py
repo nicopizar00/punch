@@ -212,7 +212,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         confirm_delete_consumed,
         execute_workflow,
         paths_collide,
-        required_data_paths,
+        used_data_paths,
         resolve_data_overrides,
         validate_produce,
     )
@@ -298,7 +298,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         results.append(_evidence_result(workflow, result))
         if result.child_exit_code is not None:
             confirm_delete_consumed(
-                required_data_paths(workflow, overrides), stdin=sys.stdin, stdout=sys.stdout
+                used_data_paths(workflow, overrides), stdin=sys.stdin, stdout=sys.stdout
             )
         effective_exit_code = _effective_exit_code(result)
         if not result.passed and overall_rc == 0:

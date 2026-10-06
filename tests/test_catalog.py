@@ -53,6 +53,16 @@ class CatalogTests(unittest.TestCase):
         ):
             load_catalog(self.root)
 
+    def test_target_may_name_an_optional_consumer(self) -> None:
+        self.edit("data-input.yaml", "requires: [carts]", "optional: [carts]")
+        catalog = load_catalog(self.root)
+        self.assertEqual(catalog.consumers_of("carts"), ("data-consumer",))
+
+    def test_optional_dataset_without_producer_is_allowed(self) -> None:
+        self.edit("data-input.yaml", "requires: [carts]", "requires: [carts]\n    optional: [extras]")
+        catalog = load_catalog(self.root)
+        self.assertEqual(catalog.producers_of("extras"), ())
+
     def test_conflicting_columns_across_producers_fail(self) -> None:
         second = (self.root / "data-output.yaml").read_text(encoding="utf-8")
         second = second.replace("name: data-producer", "name: data-producer-2")

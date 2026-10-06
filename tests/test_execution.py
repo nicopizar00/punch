@@ -98,6 +98,14 @@ class ExecutionTests(unittest.TestCase):
         shutil.copy(fixtures / "data-input.yaml", self.root / "data-input.yaml")
         self.workflow = load_workflow(self.root / "data-output.yaml")
         self.consumer = load_workflow(self.root / "data-input.yaml")
+        consumer_text = (self.root / "data-input.yaml").read_text(encoding="utf-8")
+        (self.root / "data-optional.yaml").write_text(
+            consumer_text.replace("name: data-consumer", "name: data-optional").replace(
+                "requires: [carts]", "optional: [carts]"
+            ),
+            encoding="utf-8",
+        )
+        self.optional_consumer = load_workflow(self.root / "data-optional.yaml")
         self.carts_path = self.root / "data" / "carts.csv"
 
         producer_text = (self.root / "data-output.yaml").read_text(encoding="utf-8")
@@ -382,6 +390,68 @@ class ExecutionTests(unittest.TestCase):
             resolve_data_overrides(self.consumer, ["orders=data/o.csv"])
         with self.assertRaisesRegex(ValueError, "expected <dataset>=<path>"):
             resolve_data_overrides(self.consumer, ["carts"])
+
+    def run_optional(self, overrides=None):
+        out = io.StringIO()
+        result = execute_workflow(
+            self.optional_consumer,
+            environment=self.env,
+            data_overrides=overrides or {},
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        return result, out.getvalue()
+
+    def test_optional_missing_file_runs_without_env_and_prints_note(self) -> None:
+        result, out = self.run_optional()
+        self.assertTrue(result.passed, result.failure)
+        args = self.args_path.read_text(encoding="utf-8").splitlines()
+        self.assertFalse(any(a.startswith("DATA_CARTS_CSV=") for a in args))
+        self.assertIn(
+            '[punch] optional dataset "carts" not present — scenario uses its default', out
+        )
+
+    def test_optional_header_only_is_absent(self) -> None:
+        self.write_carts("cartId,productId,sid\n\n")
+        result, out = self.run_optional()
+        self.assertTrue(result.passed, result.failure)
+        args = self.args_path.read_text(encoding="utf-8").splitlines()
+        self.assertFalse(any(a.startswith("DATA_CARTS_CSV=") for a in args))
+        self.assertIn('optional dataset "carts" not present', out)
+
+    def test_optional_present_file_injects_container_path(self) -> None:
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        result, out = self.run_optional()
+        self.assertTrue(result.passed, result.failure)
+        self.assertIn(
+            "DATA_CARTS_CSV=/scripts/data/carts.csv",
+            self.args_path.read_text(encoding="utf-8").splitlines(),
+        )
+        self.assertNotIn("optional dataset", out)
+
+    def test_optional_override_is_accepted_and_empty_override_is_absent(self) -> None:
+        from punch.execution import resolve_data_overrides
+        alt = self.root / "data" / "alt.csv"
+        alt.parent.mkdir(parents=True, exist_ok=True)
+        alt.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+        overrides = resolve_data_overrides(self.optional_consumer, ["carts=data/alt.csv"])
+        result, _ = self.run_optional(overrides)
+        self.assertTrue(result.passed, result.failure)
+        self.assertIn(
+            "DATA_CARTS_CSV=/scripts/data/alt.csv",
+            self.args_path.read_text(encoding="utf-8").splitlines(),
+        )
+        alt.write_text("cartId,productId,sid\n", encoding="utf-8")
+        result, out = self.run_optional(overrides)
+        self.assertTrue(result.passed, result.failure)
+        self.assertIn('optional dataset "carts" not present', out)
+
+    def test_used_data_paths_covers_required_and_present_optional(self) -> None:
+        from punch.execution import used_data_paths
+        self.assertEqual(used_data_paths(self.optional_consumer, {}), {})
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        self.assertEqual(used_data_paths(self.optional_consumer, {}), {"carts": self.carts_path})
+        self.assertEqual(used_data_paths(self.consumer, {}), {"carts": self.carts_path})
 
     def test_delete_prompt_is_skipped_without_a_tty(self) -> None:
         from punch.execution import confirm_delete_consumed

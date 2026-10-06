@@ -24,7 +24,7 @@ from punch.execution import (
     confirm_docker_run,
     data_environment,
     execute_workflow,
-    required_data_paths,
+    used_data_paths,
 )
 from punch.workflow import K6Workflow, WorkflowError, load_workflow
 
@@ -280,7 +280,7 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
     rc = _report(workflow, result)
     if result.child_exit_code is not None:
         confirm_delete_consumed(
-            required_data_paths(workflow, {}), stdin=sys.stdin, stdout=sys.stdout
+            used_data_paths(workflow, {}), stdin=sys.stdin, stdout=sys.stdout
         )
     if result.passed:
         _print_metrics(workflow)

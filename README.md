@@ -37,6 +37,7 @@ spec:
         columns: [orderId]
         targets: [order-status]
     requires: [carts]
+    optional: [extras]       # used when present, skipped otherwise
 ```
 
 - A producer prints `[DATA <dataset>] <csv payload>` on stdout. Rows are
@@ -49,9 +50,17 @@ spec:
   `DATA_<DATASET>_CSV=<container path>`; `--data <dataset>=<path>` reads an
   alternate file beneath `directory`. Interactive runs are offered a delete
   prompt for consumed data; non-interactive runs keep it.
+- An optional dataset (`optional: [...]`) is used when its file has at least
+  one row: Punch injects `DATA_<DATASET>_CSV` as for a required one. When the
+  file is missing or header-only, the variable is left unset, the run
+  continues, and Punch prints
+  `[punch] optional dataset "<name>" not present — scenario uses its default`.
+  `--data` and the delete prompt work the same; a producer's `targets` may
+  name an optional consumer, and an optional dataset needs no producer.
 - Every workflow YAML in one directory forms a catalog. Punch checks that each
-  target exists and requires the dataset, that every required dataset has a
-  producer, and that producers of one dataset agree on columns.
+  target exists and requires or optionally consumes the dataset, that every
+  required dataset has a producer, and that producers of one dataset agree on
+  columns.
 
 A prior data file is not evidence that the current run succeeded; inspect the
 current run evidence instead. Bundled workflows declare no data.

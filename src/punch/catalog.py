@@ -32,7 +32,8 @@ class WorkflowCatalog:
     def consumers_of(self, dataset: str) -> tuple[str, ...]:
         return tuple(sorted(
             name for name, workflow in self.workflows.items()
-            if workflow.data is not None and dataset in workflow.data.requires
+            if workflow.data is not None
+            and (dataset in workflow.data.requires or dataset in workflow.data.optional)
         ))
 
 
@@ -64,9 +65,9 @@ def _validate(catalog: WorkflowCatalog) -> None:
                 target_workflow = catalog.workflows.get(target)
                 if target_workflow is None:
                     raise CatalogError(f'{name} targets unknown workflow "{target}"')
-                if (
-                    target_workflow.data is None
-                    or product.dataset not in target_workflow.data.requires
+                if target_workflow.data is None or (
+                    product.dataset not in target_workflow.data.requires
+                    and product.dataset not in target_workflow.data.optional
                 ):
                     raise CatalogError(
                         f'{target} does not require "{product.dataset}" (targeted by {name})'
