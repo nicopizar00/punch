@@ -15,6 +15,7 @@ class DataProduct:
     dataset: str
     columns: tuple[str, ...]
     targets: tuple[str, ...]
+    recommended: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,7 @@ K6_KEYS = {"script"}
 ENVIRONMENT_KEYS = {"forward", "required"}
 OUTPUT_KEYS = {"summary"}
 DATA_KEYS = {"directory", "mountedAt", "produces", "requires", "optional"}
-PRODUCT_KEYS = {"dataset", "columns", "targets"}
+PRODUCT_KEYS = {"dataset", "columns", "targets", "recommended"}
 SUMMARY_KEYS = {"path"}
 NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 ENV_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -216,6 +217,9 @@ def _data_spec(value: Any, working_directory: Path) -> DataSpec:
             raise WorkflowError(f"{field}.dataset must match {NAME_PATTERN.pattern}")
         if any(existing.dataset == dataset for existing in produces):
             raise WorkflowError(f"duplicate dataset in spec.data.produces: {dataset}")
+        recommended = product.get("recommended", False)
+        if not isinstance(recommended, bool):
+            raise WorkflowError(f"{field}.recommended must be a boolean")
         produces.append(
             DataProduct(
                 dataset=dataset,
@@ -225,6 +229,7 @@ def _data_spec(value: Any, working_directory: Path) -> DataSpec:
                 targets=_unique_names(
                     _required(product, "targets", field), f"{field}.targets", NAME_PATTERN, "target"
                 ),
+                recommended=recommended,
             )
         )
 

@@ -313,5 +313,24 @@ class LoadWorkflowTests(unittest.TestCase):
             ("        targets: [order-status]\n", "        targets: [order-status]\n        path: x.csv\n"),
         )
 
+    def test_product_recommended_defaults_to_false(self) -> None:
+        workflow = load_workflow(self.workflow_path)
+        self.assertFalse(workflow.data.produces[0].recommended)
+
+    def test_product_recommended_true_is_loaded(self) -> None:
+        self.write_workflow(
+            self.workflow_path,
+            ("        targets: [order-status]\n",
+             "        targets: [order-status]\n        recommended: true\n"),
+        )
+        self.assertTrue(load_workflow(self.workflow_path).data.produces[0].recommended)
+
+    def test_rejects_non_boolean_recommended(self) -> None:
+        self.assertWorkflowError(
+            "spec.data.produces\\[0\\].recommended must be a boolean",
+            ("        targets: [order-status]\n",
+             "        targets: [order-status]\n        recommended: \"yes\"\n"),
+        )
+
 if __name__ == "__main__":
     unittest.main()
