@@ -10,6 +10,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from rich.cells import cell_len
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.menu import discover_workflows, run_menu
@@ -270,17 +272,17 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
 
-    def test_workflow_menu_shows_rich_table_and_selects_by_id(self) -> None:
+    def test_workflow_table_rows_are_the_selectable_entries(self) -> None:
         self.write_workflow(
             "cart-fulfill", produces={"carts": ["place-order"]}, description="Fills carts."
         )
         self.write_workflow("place-order", requires=["carts"])
         self.write_workflow("smoke")
-        calls: list[list[str]] = []
+        calls: list[tuple[list[str], str]] = []
         results = [_SelectedMenu(0), _SelectedMenu(None)]
 
         def fake_terminal_menu(entries, *, title, cursor_index=0):
-            calls.append(entries)
+            calls.append((entries, title))
             return results[len(calls) - 1]
 
         output = io.StringIO()
@@ -288,13 +290,104 @@ class MenuTests(unittest.TestCase):
             with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
                 rc = run_menu(self.root)
         self.assertEqual(rc, 0)
-        self.assertEqual(calls[1], ["cart-fulfill", "place-order", "smoke"])
-        table = output.getvalue()
+        rows, title = calls[1]
         for header in ("ID", "Description", "Required Input", "Generated Output"):
-            self.assertIn(header, table)
-        self.assertIn("Fills carts.", table)
-        self.assertIn("carts → place-order", table)
-        self.assertIn("carts ← cart-fulfill", table)
+            self.assertIn(header, title)
+        self.assertIn("Fills carts.", rows[0])
+        self.assertIn("carts → place-order", rows[0])
+        self.assertIn("carts ← cart-fulfill", rows[1])
+        self.assertEqual(rows[2].split()[0], "smoke")
+        self.assertNotIn("Fills carts.", output.getvalue())
+
+    def test_workflow_table_rows_fit_an_80_column_terminal(self) -> None:
+        self.write_workflow(
+            "purchase-flow-browser",
+            description="Full purchase journey through a real Chromium tab.",
+        )
+        self.write_workflow("producer", produces={"orders": ["consumer"]})
+        self.write_workflow("consumer", requires=["orders"])
+        calls: list[tuple[list[str], str]] = []
+        results = [_SelectedMenu(0), _SelectedMenu(None)]
+
+        def fake_terminal_menu(entries, *, title, cursor_index=0):
+            calls.append((entries, title))
+            return results[len(calls) - 1]
+
+        with patch("sys.stdin", _ConfirmedTerminal()):
+            with patch("shutil.get_terminal_size", return_value=os.terminal_size((80, 24))):
+                with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
+                    rc = run_menu(self.root)
+
+        self.assertEqual(rc, 0)
+        rows, title = calls[1]
+        header = title.splitlines()[1]
+        for column in ("ID", "Description", "Required Input", "Generated Output"):
+            self.assertIn(column, header)
+        self.assertLessEqual(max(cell_len(line) for line in [header, *rows]), 78)
+
+    def test_workflow_table_rows_fit_a_narrow_controlling_terminal(self) -> None:
+        self.write_workflow(
+            "wide-unicode-workflow",
+            description="東京でコーヒーを淹れる ☕️",
+        )
+        calls: list[tuple[list[str], str]] = []
+        results = [_SelectedMenu(0), _SelectedMenu(None)]
+
+        def fake_terminal_menu(entries, *, title, cursor_index=0):
+            calls.append((entries, title))
+            return results[len(calls) - 1]
+
+        with patch("sys.stdin", _SizedTerminal(40)):
+            with patch("os.get_terminal_size", return_value=os.terminal_size((40, 24))):
+                with patch("shutil.get_terminal_size", return_value=os.terminal_size((120, 24))):
+                    with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
+                        rc = run_menu(self.root)
+
+        self.assertEqual(rc, 0)
+        rows, title = calls[1]
+        header = title.splitlines()[1]
+        self.assertEqual(header.count("│"), 3)
+        self.assertEqual(rows[0].count("│"), 3)
+        self.assertLessEqual(max(cell_len(line) for line in [header, *rows]), 38)
+
+    def test_workflow_menu_flattens_control_whitespace_and_escapes_pipes(self) -> None:
+        self.write_workflow(
+            "fixture",
+            description='"Coffee | tea\\nsecond\\tline"',
+        )
+        calls: list[tuple[list[str], str]] = []
+        results = [_SelectedMenu(0), _SelectedMenu(None)]
+
+        def fake_terminal_menu(entries, *, title, cursor_index=0):
+            calls.append((entries, title))
+            return results[len(calls) - 1]
+
+        with patch("sys.stdin", _ConfirmedTerminal()):
+            with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
+                rc = run_menu(self.root)
+
+        self.assertEqual(rc, 0)
+        rows, _ = calls[1]
+        self.assertIn(r"Coffee \| tea second line", rows[0])
+        self.assertFalse(any(character in rows[0] for character in "\n\r\t"))
+
+    def test_invalid_workflow_error_stays_on_one_selectable_row(self) -> None:
+        (self.root / "broken.yaml").write_text("apiVersion: [", encoding="utf-8")
+        calls: list[tuple[list[str], str]] = []
+        results = [_SelectedMenu(0), _SelectedMenu(None)]
+
+        def fake_terminal_menu(entries, *, title, cursor_index=0):
+            calls.append((entries, title))
+            return results[len(calls) - 1]
+
+        with patch("sys.stdin", _ConfirmedTerminal()):
+            with patch("shutil.get_terminal_size", return_value=os.terminal_size((300, 24))):
+                with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
+                    rc = run_menu(self.root)
+
+        self.assertEqual(rc, 0)
+        rows, _ = calls[1]
+        self.assertFalse(any(character in rows[0] for character in "\n\r\t"))
 
     def test_monitoring_setup_is_a_stub(self) -> None:
         self.write_workflow("fixture")
@@ -491,6 +584,15 @@ class _ConfirmedTerminal(io.StringIO):
 
     def isatty(self) -> bool:
         return True
+
+
+class _SizedTerminal(_ConfirmedTerminal):
+    def __init__(self, columns: int) -> None:
+        super().__init__()
+        self.columns = columns
+
+    def fileno(self) -> int:
+        return 123
 
 
 if __name__ == "__main__":

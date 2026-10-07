@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from rich.console import Console
-from rich.markup import escape
-from rich.table import Table
+from rich.cells import cell_len, set_cell_size
 from simple_term_menu import TerminalMenu
 
 from punch.catalog import CatalogError, WorkflowCatalog, load_catalog
@@ -89,34 +88,88 @@ def _generated_output(workflow: K6Workflow) -> str:
     )
 
 
-def _workflow_table(paths: List[Path], workflows_dir: Path) -> Table:
+def _single_line(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _terminal_columns() -> int:
+    try:
+        return os.get_terminal_size(sys.stdin.fileno()).columns
+    except (AttributeError, OSError, ValueError):
+        return shutil.get_terminal_size().columns
+
+
+def _workflow_menu_rows(paths: List[Path], workflows_dir: Path) -> tuple[List[str], str]:
     try:
         catalog: Optional[WorkflowCatalog] = load_catalog(workflows_dir)
     except CatalogError:
         catalog = None
-    table = Table(title="Available k6 workflows", title_justify="left")
-    table.add_column("ID", style="bold cyan", no_wrap=True)
-    table.add_column("Description")
-    table.add_column("Required Input")
-    table.add_column("Generated Output")
+    headers = ("ID", "Description", "Required Input", "Generated Output")
+    records = []
     for path in paths:
         try:
             workflow = load_workflow(path)
         except WorkflowError as error:
-            table.add_row(path.stem, f"[red]invalid: {escape(str(error))}[/red]", "—", "—")
+            records.append(
+                (_single_line(path.stem), _single_line(f"invalid: {error}"), "—", "—")
+            )
             continue
-        table.add_row(
-            path.stem,
-            escape(workflow.description) or "—",
-            _required_input(workflow, catalog),
-            _generated_output(workflow),
+        records.append(
+            (
+                _single_line(path.stem),
+                _single_line(workflow.description) or "—",
+                _single_line(_required_input(workflow, catalog)),
+                _single_line(_generated_output(workflow)),
+            )
         )
-    return table
+
+    desired_widths = [
+        max(cell_len(header), *(cell_len(record[index]) for record in records))
+        for index, header in enumerate(headers)
+    ]
+    separator = " │ "
+    separator_width = cell_len(separator) * (len(headers) - 1)
+    available_width = max(
+        len(headers), _terminal_columns() - cell_len("> ") - separator_width
+    )
+    preferred_widths = [desired_widths[0], *(cell_len(header) for header in headers[1:])]
+    widths = (
+        preferred_widths.copy()
+        if sum(preferred_widths) <= available_width
+        else [1] * len(headers)
+    )
+    remaining_width = available_width - sum(widths)
+
+    while remaining_width > 0:
+        grew = False
+        for index in range(len(widths)):
+            if widths[index] < desired_widths[index]:
+                widths[index] += 1
+                remaining_width -= 1
+                grew = True
+                if remaining_width == 0:
+                    break
+        if not grew:
+            break
+
+    def format_row(values: tuple[str, str, str, str]) -> str:
+        cells = []
+        for value, width in zip(values, widths):
+            if cell_len(value) > width:
+                value = (
+                    "…" if width == 1 else set_cell_size(value, width - 1).rstrip() + "…"
+                )
+            cells.append(set_cell_size(value, width))
+        return separator.join(cells)
+
+    title = "Available k6 workflows\n" + format_row(headers)
+    rows = [format_row(record).replace("|", r"\|") for record in records]
+    return rows, title
 
 
 def _choose_workflow(paths: List[Path], workflows_dir: Path) -> Path:
-    Console().print(_workflow_table(paths, workflows_dir))
-    return paths[_select([path.stem for path in paths], "Select a workflow:")]
+    rows, title = _workflow_menu_rows(paths, workflows_dir)
+    return paths[_select(rows, title)]
 
 
 def _read_base_url(path: Path) -> Optional[str]:
