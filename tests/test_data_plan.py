@@ -13,6 +13,7 @@ from punch.data_plan import (
     CANCELED,
     Choice,
     DataPlan,
+    PickerUnavailable,
     PlanStop,
     plan_data,
     switch_hint,
@@ -201,10 +202,20 @@ class PlanDataTests(unittest.TestCase):
         self.assertEqual(choice.cursor, 0)
         self.assertEqual(dict(plan.optional_choices), {"carts": False})
 
+    def test_unavailable_picker_propagates(self) -> None:
+        self.make_optional()
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+
+        def unavailable(choice: Choice) -> int | None:
+            raise PickerUnavailable()
+
+        with self.assertRaises(PickerUnavailable):
+            self.plan("data-consumer", unavailable)
+
     def test_source_picker_file_with_rows(self) -> None:
         self.make_optional()
         self.write_carts("cartId,productId,sid\nc,p,s\n")
-        plan = self.plan("data-consumer", ScriptedChooser("data/carts.csv (1 rows)"))
+        plan = self.plan("data-consumer", ScriptedChooser("data/carts.csv (1 row)"))
         self.assertEqual(dict(plan.optional_choices), {"carts": True})
 
     def test_optional_file_without_rows_offers_producers(self) -> None:

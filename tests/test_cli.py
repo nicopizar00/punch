@@ -367,7 +367,7 @@ class CliTests(unittest.TestCase):
             rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 0)
         [(entries, kwargs)] = calls
-        self.assertEqual(entries, ["default (built-in)", "data/carts.csv (1 rows)"])
+        self.assertEqual(entries, ["default (built-in)", "data/carts.csv (1 row)"])
         self.assertEqual(kwargs["cursor_index"], 0)
         [call] = self.fake_docker_calls()
         self.assertFalse(any(argument.startswith("DATA_CARTS_CSV=") for argument in call))
@@ -384,6 +384,50 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             self.evidence()["results"][0]["dataSources"], {"carts": "data/carts.csv"}
         )
+
+    def test_unusable_terminal_falls_back_to_automatic_rule(self) -> None:
+        self.make_consumer_optional()
+        self.write_carts_rows()
+        output = io.StringIO()
+        with patch("sys.stdin", TtyInput("")), patch("sys.stdout", output):
+            with patch("punch.menu.TerminalMenu", side_effect=NotImplementedError("TERM unset")):
+                rc = main(["run", str(self.consumer_path)])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.compose_run_count(), 1)
+        [call] = self.fake_docker_calls()
+        self.assertIn("DATA_CARTS_CSV=/scripts/data/carts.csv", call)
+        self.assertIsNone(self.evidence()["results"][0]["failure"])
+        self.assertIn(
+            "[punch] no interactive terminal for pickers; using automatic data sources",
+            output.getvalue(),
+        )
+
+    def test_two_level_chain_switches_through_consumer_to_producer(self) -> None:
+        os.environ["RUN_ID"] = "run-1"
+        os.environ["FAKE_DOCKER_STDOUT"] = "[DATA carts] c,p,s"
+        text = self.consumer_path.read_text(encoding="utf-8")
+        self.consumer_path.write_text(
+            text.replace(
+                "    requires: [carts]",
+                "    produces:\n      - dataset: orders\n        columns: [orderId]\n"
+                "        targets: [data-status]\n    requires: [carts]",
+            ),
+            encoding="utf-8",
+        )
+        status = text.replace("name: data-consumer", "name: data-status")
+        status = status.replace("requires: [carts]", "requires: [orders]")
+        status_path = self.flows / "data-status.yaml"
+        status_path.write_text(status, encoding="utf-8")
+        with self.picker(0, 0) as (calls, output):
+            rc = main(["run", str(status_path)])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.compose_run_count(), 1)
+        [call] = self.fake_docker_calls()
+        self.assertIn("/scripts/data-producer.js", call)
+        evidence = self.evidence()
+        self.assertEqual(evidence["results"][0]["switchedFrom"], ["data-status", "data-consumer"])
+        self.assertIn("run data-status next (still missing: orders)", output.getvalue())
 
     def test_cancelled_source_picker_fails_before_docker(self) -> None:
         self.make_consumer_optional()

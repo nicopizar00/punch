@@ -515,6 +515,14 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(overrides, {"carts": self.root / "data" / "alt.csv"})
         self.assertEqual(choices, {})
 
+    def test_resolve_data_args_rejects_default_and_path_for_one_dataset(self) -> None:
+        from punch.execution import resolve_data_args
+        for raw in (["carts=default", "carts=data/alt.csv"], ["carts=data/alt.csv", "carts=default"]):
+            with self.assertRaisesRegex(
+                ValueError, '--data carts: both "default" and a path given'
+            ):
+                resolve_data_args(self.optional_consumer, raw)
+
     def test_resolve_data_args_rejects_default_for_required(self) -> None:
         from punch.execution import resolve_data_args
         with self.assertRaisesRegex(

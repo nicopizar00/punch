@@ -138,11 +138,15 @@
        `<origin>` is `switched_from[0]` and still-missing are its missing
        required datasets after the run.
   5. `menu.choose(choice) -> int | None` renders a `Choice` with the existing
-     `_select`/`TerminalMenu` helper; Esc, non-TTY stdin, or an unavailable
-     terminal menu → `None`.
+     `_select`/`TerminalMenu` helper; Esc → `None`. A non-TTY stdin or an
+     unavailable terminal menu is distinct from Esc: `choose` raises
+     `PickerUnavailable` (defined in `data_plan`), which `plan_data` does not
+     catch.
   6. **`punch` menu**: `plan_data` (with `os.environ`) runs right after
      workflow selection, before base URL, options, produce, and Docker
      prompts.
+     - `PickerUnavailable` → treated as an unavailable menu: `run_menu`
+       reports `[punch] interactive menu requires a terminal.`, exit 1.
      - `PlanStop` with `canceled` → `[punch] menu canceled.`, exit 0 (same
        as Esc on any other menu screen). Other `PlanStop` → reason on
        stderr, exit 1. No Docker prompt either way.
@@ -155,6 +159,10 @@
      `--no-input`: `plan_data` (with `menu.choose`, the `--data` overrides
      and `=default` choices as presets, `os.environ`) runs before the
      collision check and any Docker call.
+     - `PickerUnavailable` (TTY stdin but no usable terminal menu) → print
+       `[punch] no interactive terminal for pickers; using automatic data
+       sources` and continue as the non-interactive path: no plan, no stop,
+       no evidence failure.
      - `PlanStop` → reason on stderr; evidence result for the selected
        workflow fails with the reason; exit 1; no Docker.
      - Switched plan → the producer runs with exactly `plan.produce`; the

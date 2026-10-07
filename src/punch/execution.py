@@ -229,6 +229,7 @@ def resolve_data_args(
     """Split `--data` into path overrides and `<dataset>=default` choices."""
     paths: list[str] = []
     choices: dict[str, bool] = {}
+    pathed: set[str] = set()
     for item in raw:
         dataset, separator, value = item.partition("=")
         if separator and value == DEFAULT_DATA:
@@ -240,6 +241,10 @@ def resolve_data_args(
             choices[dataset] = False
         else:
             paths.append(item)
+            pathed.add(dataset)
+    for dataset in choices:
+        if dataset in pathed:
+            raise ValueError(f'--data {dataset}: both "default" and a path given')
     return resolve_data_overrides(workflow, paths), choices
 
 

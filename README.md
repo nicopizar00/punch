@@ -67,7 +67,9 @@ spec:
   one row: Punch injects `DATA_<DATASET>_CSV` as for a required one. When the
   file is missing or header-only, the variable is left unset, the run
   continues, and Punch prints
-  `[punch] optional dataset "<name>" not present — scenario uses its default`.
+  `[punch] optional dataset "<name>" not used — scenario uses its default`.
+  The automatic rule applies unless a source is picked interactively or
+  `--data <dataset>=default` / `--data <dataset>=<path>` is given.
   `--data` and the delete prompt work the same; a producer's `targets` may
   name an optional consumer, and an optional dataset needs no producer.
 - Every workflow YAML in one directory forms a catalog. Punch checks that each

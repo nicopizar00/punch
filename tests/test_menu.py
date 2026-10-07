@@ -281,10 +281,24 @@ class MenuTests(unittest.TestCase):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         entries, kwargs = calls[2]
-        self.assertEqual(entries, ["default (built-in)", "data/orders.csv (1 rows)"])
+        self.assertEqual(entries, ["default (built-in)", "data/orders.csv (1 row)"])
         self.assertEqual(kwargs["cursor_index"], 0)
         [call] = self.fake_docker_calls()
         self.assertFalse(any(argument.startswith("DATA_ORDERS_CSV=") for argument in call))
+
+    def test_unavailable_source_picker_reports_terminal_needed(self) -> None:
+        self.write_workflow("producer", produces={"orders": ["consumer"]})
+        self.write_workflow("consumer", optional=["orders"])
+        (self.root / "data").mkdir()
+        (self.root / "data" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
+        errors = io.StringIO()
+        menus = [_SelectedMenu(0), _SelectedMenu(0), NotImplementedError("TERM unset")]
+        with patch("sys.stdin", _ConfirmedTerminal()), patch("sys.stderr", errors):
+            with patch("punch.menu.TerminalMenu", side_effect=menus):
+                rc = run_menu(self.root)
+        self.assertEqual(rc, 1)
+        self.assertIn("interactive menu requires a terminal.", errors.getvalue())
+        self.assertEqual(self.fake_docker_calls(), [])
 
     def test_optional_source_picker_file_injects_data_env(self) -> None:
         self.write_workflow("producer", produces={"orders": ["consumer"]})
