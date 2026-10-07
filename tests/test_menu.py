@@ -91,6 +91,7 @@ class MenuTests(unittest.TestCase):
         forward: list[str] | None = None,
         produces: dict[str, list[str]] | None = None,
         requires: list[str] | None = None,
+        optional: list[str] | None = None,
         service: str = "k6",
         description: str | None = None,
     ) -> Path:
@@ -98,7 +99,7 @@ class MenuTests(unittest.TestCase):
         if forward:
             environment = "  environment:\n    forward: [" + ", ".join(forward) + "]\n"
         data = ""
-        if produces or requires:
+        if produces or requires or optional:
             data = "  data:\n    directory: data\n    mountedAt: /scripts/data\n"
             if produces:
                 data += "    produces:\n"
@@ -109,6 +110,8 @@ class MenuTests(unittest.TestCase):
                     )
             if requires:
                 data += f"    requires: [{', '.join(requires)}]\n"
+            if optional:
+                data += f"    optional: [{', '.join(optional)}]\n"
         path = self.root / f"{name}.yaml"
         path.write_text(
             WORKFLOW_TEMPLATE.format(
@@ -291,11 +294,15 @@ class MenuTests(unittest.TestCase):
                 rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         rows, title = calls[1]
-        for header in ("ID", "Description", "Required Input", "Generated Output"):
+        for header in ("Name", "Description", "In", "Out"):
             self.assertIn(header, title)
+        self.assertNotIn("Required Input", title)
         self.assertIn("Fills carts.", rows[0])
-        self.assertIn("carts → place-order", rows[0])
-        self.assertIn("carts ← cart-fulfill", rows[1])
+        self.assertIn("carts", rows[0])
+        self.assertNotIn("→", rows[0])
+        self.assertNotIn("place-order", rows[0])
+        self.assertIn("carts", rows[1])
+        self.assertNotIn("←", rows[1])
         self.assertEqual(rows[2].split()[0], "smoke")
         self.assertNotIn("Fills carts.", output.getvalue())
 
@@ -321,9 +328,30 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         rows, title = calls[1]
         header = title.splitlines()[1]
-        for column in ("ID", "Description", "Required Input", "Generated Output"):
+        for column in ("Name", "Description", "In", "Out"):
             self.assertIn(column, header)
         self.assertLessEqual(max(cell_len(line) for line in [header, *rows]), 78)
+
+    def test_workflow_table_marks_optional_inputs(self) -> None:
+        self.write_workflow("producer", produces={"owned-orders": ["consumer"]})
+        self.write_workflow("other", produces={"carts": ["consumer"]})
+        self.write_workflow("consumer", requires=["carts"], optional=["owned-orders"])
+        calls: list[tuple[list[str], str]] = []
+        results = [_SelectedMenu(0), _SelectedMenu(None)]
+
+        def fake_terminal_menu(entries, *, title, cursor_index=0):
+            calls.append((entries, title))
+            return results[len(calls) - 1]
+
+        with patch("sys.stdin", _ConfirmedTerminal()):
+            with patch("shutil.get_terminal_size", return_value=os.terminal_size((160, 24))):
+                with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
+                    rc = run_menu(self.root)
+
+        self.assertEqual(rc, 0)
+        rows, _title = calls[1]
+        consumer = next(row for row in rows if row.startswith("consumer"))
+        self.assertIn("carts, owned-orders?", consumer)
 
     def test_workflow_table_rows_fit_a_narrow_controlling_terminal(self) -> None:
         self.write_workflow(

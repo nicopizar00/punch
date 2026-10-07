@@ -18,7 +18,7 @@ from typing import List, Optional
 from rich.cells import cell_len, set_cell_size
 from simple_term_menu import TerminalMenu
 
-from punch.catalog import CatalogError, WorkflowCatalog, load_catalog
+from punch.catalog import CatalogError, load_catalog
 from punch.execution import (
     ExecutionResult,
     build_compose_run_command,
@@ -69,23 +69,17 @@ def _select(entries: List[str], title: str, cursor_index: int = 0) -> int:
     return selection
 
 
-def _required_input(workflow: K6Workflow, catalog: Optional[WorkflowCatalog]) -> str:
+def _required_input(workflow: K6Workflow) -> str:
     if workflow.data is None:
         return "—"
-    lines = []
-    for dataset in workflow.data.requires + workflow.data.optional:
-        producers = ", ".join(catalog.producers_of(dataset)) if catalog else "?"
-        optional = " (optional)" if dataset in workflow.data.optional else ""
-        lines.append(f"{dataset}{optional} ← {producers}")
-    return "\n".join(lines) or "—"
+    names = [*workflow.data.requires, *(f"{d}?" for d in workflow.data.optional)]
+    return ", ".join(names) or "—"
 
 
 def _generated_output(workflow: K6Workflow) -> str:
     if workflow.data is None or not workflow.data.produces:
         return "—"
-    return "\n".join(
-        f"{product.dataset} → {', '.join(product.targets)}" for product in workflow.data.produces
-    )
+    return ", ".join(product.dataset for product in workflow.data.produces)
 
 
 def _single_line(value: str) -> str:
@@ -100,11 +94,7 @@ def _terminal_columns() -> int:
 
 
 def _workflow_menu_rows(paths: List[Path], workflows_dir: Path) -> tuple[List[str], str]:
-    try:
-        catalog: Optional[WorkflowCatalog] = load_catalog(workflows_dir)
-    except CatalogError:
-        catalog = None
-    headers = ("ID", "Description", "Required Input", "Generated Output")
+    headers = ("Name", "Description", "In", "Out")
     records = []
     for path in paths:
         try:
@@ -118,7 +108,7 @@ def _workflow_menu_rows(paths: List[Path], workflows_dir: Path) -> tuple[List[st
             (
                 _single_line(path.stem),
                 _single_line(workflow.description) or "—",
-                _single_line(_required_input(workflow, catalog)),
+                _single_line(_required_input(workflow)),
                 _single_line(_generated_output(workflow)),
             )
         )
