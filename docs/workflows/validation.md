@@ -34,6 +34,9 @@ Schema (informal — produced by `src/punch/__main__.py`):
   "results": [
     {"test": "smoke", "workflow": "workflows/k6/smoke.yaml", "exitCode": 0,
      "passed": true, "failure": null, "datasets": []}
+    // optional per-result keys:
+    //   "switchedFrom": ["<workflow>", ...]          // only when a producer pick replaced the selected workflow
+    //   "dataSources": {"<dataset>": "default" | "<path>"}  // every dataset the workflow declares it reads
   ],
   "exitCode": 0,
   "passed": true,
@@ -66,7 +69,12 @@ Datasets are optional and declared in `spec.data`. A producer's
 `[DATA <dataset>]` stdout records are written to `<directory>/<dataset>.csv`
 (header from `columns`) only with `--produce <dataset>`, and published
 atomically only after success. A consumer fails before Docker when a required
-dataset has no rows. The bundled workflows declare no data, so the default CI
+dataset has no rows. In a terminal, `punch run` and the `punch` menu first
+offer each optional dataset's source (built-in default or its data file), then,
+for a dataset with no rows, a producer picker (the `recommended: true` producer
+preselected); the picked producer runs with `--produce`, and `switchedFrom`
+records the replaced workflow. `--no-input` and `--data <dataset>=default` are
+the non-interactive equivalents. The bundled workflows declare no data, so the default CI
 command remains `./bin/punch run all`.
 
 In addition, each test writes its own evidence under `reports/`:

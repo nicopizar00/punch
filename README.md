@@ -36,6 +36,7 @@ spec:
       - dataset: orders
         columns: [orderId]
         targets: [order-status]
+        recommended: true   # optional
     requires: [carts]
     optional: [extras]       # used when present, skipped otherwise
 ```
@@ -50,6 +51,18 @@ spec:
   `DATA_<DATASET>_CSV=<container path>`; `--data <dataset>=<path>` reads an
   alternate file beneath `directory`. Interactive runs are offered a delete
   prompt for consumed data; non-interactive runs keep it.
+- In a terminal, `punch run <workflow>` and the `punch` menu settle data
+  before Docker (`punch.data_plan`). Each optional dataset with more than one
+  available source offers `default (built-in)` or its data file (cursor on
+  default). Then the normal preflight runs; when a dataset the run reads has
+  no rows, an arrow-key list of every producer opens — the one whose product
+  sets `recommended: true` labeled and preselected (first by name if
+  several), producers missing required environment tagged `needs <VAR>`.
+  Picking one runs it with `--produce <dataset>` — still one Compose run —
+  and walks further when it is missing data too; the hint names the workflow
+  to re-run and what it still misses. Esc cancels. Non-interactive
+  equivalents: `--no-input`, `--data <dataset>=default`,
+  `--data <dataset>=<path>`, or run the producer with `--produce`.
 - An optional dataset (`optional: [...]`) is used when its file has at least
   one row: Punch injects `DATA_<DATASET>_CSV` as for a required one. When the
   file is missing or header-only, the variable is left unset, the run
