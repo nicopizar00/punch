@@ -19,7 +19,7 @@ from rich.cells import cell_len, set_cell_size
 from simple_term_menu import TerminalMenu
 
 from punch.catalog import CatalogError, load_catalog
-from punch.data_plan import Choice, PlanStop, plan_data, switch_hint
+from punch.data_plan import Choice, PickerUnavailable, PlanStop, plan_data, switch_hint
 from punch.execution import (
     ExecutionResult,
     build_compose_run_command,
@@ -164,11 +164,13 @@ def _choose_workflow(paths: List[Path]) -> Path:
 
 
 def choose(choice: Choice) -> Optional[int]:
-    """Render a Choice with the shared arrow-key menu; Esc or no terminal → None."""
+    """Render a Choice with the shared arrow-key menu; Esc → None; no usable terminal → PickerUnavailable."""
     try:
         return _select(list(choice.options), choice.title, cursor_index=choice.cursor)
-    except (_MenuCancelled, _MenuUnavailable):
+    except _MenuCancelled:
         return None
+    except _MenuUnavailable as error:
+        raise PickerUnavailable from error
 
 
 def _read_base_url(path: Path) -> Optional[str]:
@@ -329,7 +331,10 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
         print(f"[punch] could not load workflow {selected.stem}: {error}", file=sys.stderr)
         return 1
 
-    outcome = plan_data(workflow, catalog, {}, {}, choose=choose, environment=os.environ)
+    try:
+        outcome = plan_data(workflow, catalog, {}, {}, choose=choose, environment=os.environ)
+    except PickerUnavailable:
+        raise _MenuUnavailable from None
     if isinstance(outcome, PlanStop):
         if outcome.canceled:
             raise _MenuCancelled

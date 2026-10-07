@@ -20,7 +20,7 @@ from pathlib import Path
 import socket
 from urllib.parse import urlparse
 
-from punch.data_plan import DataPlan, PlanStop, plan_data, switch_hint
+from punch.data_plan import DataPlan, PickerUnavailable, PlanStop, plan_data, switch_hint
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -275,10 +275,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         except (CatalogError, ValueError):
             pass  # reported by the per-workflow loop below
         else:
-            outcome = plan_data(
-                selected, catalog, overrides, preset, choose=choose, environment=os.environ
-            )
-            if isinstance(outcome, PlanStop):
+            try:
+                outcome = plan_data(
+                    selected, catalog, overrides, preset, choose=choose, environment=os.environ
+                )
+            except PickerUnavailable:
+                print(
+                    "[punch] no interactive terminal for pickers; using automatic data sources",
+                    flush=True,
+                )
+                outcome = None
+            if outcome is None:
+                pass
+            elif isinstance(outcome, PlanStop):
                 print(f"[punch] {outcome.reason}", file=sys.stderr, flush=True)
                 results.append(_evidence_result(
                     selected, ExecutionResult(selected.name, (), None, False, outcome.reason)

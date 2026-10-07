@@ -33,6 +33,11 @@ class Choice:
     cursor: int = 0
 
 
+class PickerUnavailable(Exception):
+    """The chooser cannot show a picker (no usable terminal)."""
+
+
+# A Chooser may raise PickerUnavailable; plan_data lets it propagate.
 Chooser = Callable[[Choice], "int | None"]
 
 
@@ -81,7 +86,8 @@ def _choose_sources(
             title=f'"{workflow.name}" can read "{dataset}" — pick a source (Esc cancels)',
             options=(
                 DEFAULT_SOURCE,
-                f"{_relative(workflow, path)} ({f'{rows} rows' if rows else 'no rows'})",
+                f"{_relative(workflow, path)} "
+                f"({(f'{rows} row' if rows == 1 else f'{rows} rows') if rows else 'no rows'})",
             ),
         ))
         if index is None:
