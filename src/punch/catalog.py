@@ -36,6 +36,13 @@ class WorkflowCatalog:
             and (dataset in workflow.data.requires or dataset in workflow.data.optional)
         ))
 
+    def recommended_producer(self, dataset: str) -> str | None:
+        """First producer, by name, that flags `dataset` as recommended."""
+        for name in self.producers_of(dataset):
+            if self.workflows[name].data.product(dataset).recommended:
+                return name
+        return None
+
 
 def load_catalog(directory: Path) -> WorkflowCatalog:
     workflows: dict[str, K6Workflow] = {}

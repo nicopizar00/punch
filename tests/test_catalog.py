@@ -30,6 +30,14 @@ class CatalogTests(unittest.TestCase):
         self.assertIn(old, text)
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+    def copy_producer(self, name: str, *, recommended: bool = False) -> None:
+        text = (self.root / "data-output.yaml").read_text(encoding="utf-8")
+        text = text.replace("name: data-producer", f"name: {name}")
+        if recommended:
+            text = text.replace("targets: [data-consumer]",
+                                "targets: [data-consumer]\n        recommended: true")
+        (self.root / f"{name}.yaml").write_text(text, encoding="utf-8")
+
     def test_links_producers_and_consumers(self) -> None:
         catalog = load_catalog(self.root)
         self.assertEqual(catalog.producers_of("carts"), ("data-producer",))
@@ -80,6 +88,22 @@ class CatalogTests(unittest.TestCase):
         (self.root / "broken.yaml").write_text("apiVersion: nope\n", encoding="utf-8")
         with self.assertRaisesRegex(CatalogError, "broken.yaml"):
             load_catalog(self.root)
+
+    def test_recommended_producer_is_the_flagged_one(self) -> None:
+        self.copy_producer("other-producer", recommended=True)
+        catalog = load_catalog(self.root)
+        self.assertEqual(catalog.producers_of("carts"), ("data-producer", "other-producer"))
+        self.assertEqual(catalog.recommended_producer("carts"), "other-producer")
+
+    def test_no_recommended_producer_returns_none(self) -> None:
+        catalog = load_catalog(self.root)
+        self.assertIsNone(catalog.recommended_producer("carts"))
+        self.assertIsNone(catalog.recommended_producer("unknown"))
+
+    def test_first_recommended_producer_by_name_wins(self) -> None:
+        self.copy_producer("zz-producer", recommended=True)
+        self.copy_producer("mm-producer", recommended=True)
+        self.assertEqual(load_catalog(self.root).recommended_producer("carts"), "mm-producer")
 
 
 if __name__ == "__main__":
