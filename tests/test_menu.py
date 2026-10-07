@@ -92,6 +92,7 @@ class MenuTests(unittest.TestCase):
         produces: dict[str, list[str]] | None = None,
         requires: list[str] | None = None,
         optional: list[str] | None = None,
+        recommended: list[str] | None = None,
         service: str = "k6",
         description: str | None = None,
     ) -> Path:
@@ -108,6 +109,8 @@ class MenuTests(unittest.TestCase):
                         f"      - dataset: {dataset}\n        columns: [id]\n"
                         f"        targets: [{', '.join(targets)}]\n"
                     )
+                    if dataset in (recommended or []):
+                        data += "        recommended: true\n"
             if requires:
                 data += f"    requires: [{', '.join(requires)}]\n"
             if optional:
@@ -142,6 +145,19 @@ class MenuTests(unittest.TestCase):
         if not self.args_path.exists():
             return []
         return [json.loads(line) for line in self.args_path.read_text(encoding="utf-8").splitlines()]
+
+    @contextmanager
+    def record_menus(self, *indices: int | None, answers: str = "yes\n"):
+        calls: list[tuple[list[str], dict]] = []
+        selections = iter(indices)
+
+        def factory(entries, **kwargs):
+            calls.append((list(entries), kwargs))
+            return _SelectedMenu(next(selections))
+
+        with patch("sys.stdin", _ScriptedTerminal(answers)):
+            with patch("punch.menu.TerminalMenu", side_effect=factory):
+                yield calls
 
     @contextmanager
     def select_menu(self, *indices: int | None):
@@ -222,12 +238,86 @@ class MenuTests(unittest.TestCase):
             (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n"
         )
 
-    def test_consumer_without_data_fails_before_docker(self) -> None:
+    def test_esc_on_producer_picker_cancels_menu_before_docker(self) -> None:
         self.write_pair()
-        with self.select_menu(0, 0):
+        output = io.StringIO()
+        with self.select_menu(0, 0, None), patch("sys.stdout", output):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.fake_docker_calls(), [])
+        self.assertIn("[punch] menu canceled.", output.getvalue())
+
+    def test_switch_picks_producer_before_base_url_and_forces_produce(self) -> None:
+        self.write_workflow("a-producer", produces={"orders": ["consumer"]})
+        self.write_workflow("consumer", requires=["orders"])
+        self.write_workflow("producer", forward=["BASE_URL"],
+                            produces={"orders": ["consumer"]}, recommended=["orders"])
+        output = io.StringIO()
+        with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
+            # top-level, workflow (consumer=1), producer picker (producer=1), base URL (0)
+            with self.record_menus(0, 1, 1, 0) as calls, patch("sys.stdout", output):
+                with patch("builtins.input", return_value="n") as prompt:
+                    rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        entries, kwargs = calls[2]
+        self.assertEqual(entries, ["a-producer", "producer  (recommended)"])
+        self.assertEqual(kwargs["cursor_index"], 1)
+        prompt.assert_not_called()
+        [call] = self.fake_docker_calls()
+        self.assertIn("/scripts/producer.js", call)
+        self.assertEqual(
+            (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n"
+        )
+        text = output.getvalue()
+        self.assertIn('[punch] writing "orders" (needed by the selected workflow)', text)
+        self.assertIn("[punch] orders ready; run consumer next.", text)
+
+    def test_optional_source_picker_default_runs_without_data_env(self) -> None:
+        self.write_workflow("producer", produces={"orders": ["consumer"]})
+        self.write_workflow("consumer", optional=["orders"])
+        (self.root / "data").mkdir()
+        (self.root / "data" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
+        with self.record_menus(0, 0, 0) as calls:
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        entries, kwargs = calls[2]
+        self.assertEqual(entries, ["default (built-in)", "data/orders.csv (1 rows)"])
+        self.assertEqual(kwargs["cursor_index"], 0)
+        [call] = self.fake_docker_calls()
+        self.assertFalse(any(argument.startswith("DATA_ORDERS_CSV=") for argument in call))
+
+    def test_optional_source_picker_file_injects_data_env(self) -> None:
+        self.write_workflow("producer", produces={"orders": ["consumer"]})
+        self.write_workflow("consumer", optional=["orders"])
+        (self.root / "data").mkdir()
+        (self.root / "data" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
+        with self.record_menus(0, 0, 1):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("DATA_ORDERS_CSV=/scripts/data/orders.csv", call)
+
+    def test_present_required_data_opens_no_picker(self) -> None:
+        self.write_pair()
+        (self.root / "data").mkdir()
+        (self.root / "data" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
+        with self.record_menus(0, 0) as calls:
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 2)
+        [call] = self.fake_docker_calls()
+        self.assertIn("/scripts/consumer.js", call)
+
+    def test_plan_stop_without_cancel_fails_before_docker(self) -> None:
+        self.write_workflow("consumer", requires=["orders"])
+        self.write_workflow("producer", produces={"orders": ["consumer"]}, requires=["orders"])
+        stderr = io.StringIO()
+        # consumer=0, producer picker → producer (0), producer needs orders → producer again (0)
+        with self.record_menus(0, 0, 0, 0), patch("sys.stderr", stderr):
             rc = run_menu(self.root)
         self.assertEqual(rc, 1)
         self.assertEqual(self.fake_docker_calls(), [])
+        self.assertIn("[punch] producer cycle: consumer → producer → producer", stderr.getvalue())
 
     def test_broken_catalog_fails_before_docker(self) -> None:
         self.write_workflow("producer", produces={"orders": ["ghost"]})
@@ -610,6 +700,11 @@ class _ConfirmedTerminal(io.StringIO):
     def __init__(self) -> None:
         super().__init__("yes\n")
 
+    def isatty(self) -> bool:
+        return True
+
+
+class _ScriptedTerminal(io.StringIO):
     def isatty(self) -> bool:
         return True
 

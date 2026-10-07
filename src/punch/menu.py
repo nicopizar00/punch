@@ -13,13 +13,13 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from rich.cells import cell_len, set_cell_size
 from simple_term_menu import TerminalMenu
 
 from punch.catalog import CatalogError, load_catalog
-from punch.data_plan import Choice
+from punch.data_plan import Choice, PlanStop, plan_data, switch_hint
 from punch.execution import (
     ExecutionResult,
     build_compose_run_command,
@@ -243,11 +243,15 @@ def _choose_options(workflow: K6Workflow, options_dir: Path) -> dict:
     return _load_options_preset(paths[choice - 1])
 
 
-def _choose_produce(workflow: K6Workflow) -> tuple[str, ...]:
+def _choose_produce(workflow: K6Workflow, forced: Sequence[str] = ()) -> tuple[str, ...]:
     if workflow.data is None:
         return ()
     chosen = []
     for product in workflow.data.produces:
+        if product.dataset in forced:
+            print(f'[punch] writing "{product.dataset}" (needed by the selected workflow)')
+            chosen.append(product.dataset)
+            continue
         answer = _prompt(
             f'Write "{product.dataset}" data for {", ".join(product.targets)}? (y/N)',
             default="n",
@@ -325,9 +329,18 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
         print(f"[punch] could not load workflow {selected.stem}: {error}", file=sys.stderr)
         return 1
 
+    outcome = plan_data(workflow, catalog, {}, {}, choose=choose, environment=os.environ)
+    if isinstance(outcome, PlanStop):
+        if outcome.canceled:
+            raise _MenuCancelled
+        print(f"[punch] {outcome.reason}", file=sys.stderr)
+        return 1
+    plan = outcome
+    workflow, choices = plan.workflow, plan.optional_choices
+
     base_url = _choose_base_url(workflow)
     options = _choose_options(workflow, resolved_options_dir)
-    produce = _choose_produce(workflow)
+    produce = _choose_produce(workflow, plan.produce)
 
     environment = dict(os.environ)
     if base_url is not None:
@@ -335,7 +348,7 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
     environment.update(options)
 
     command = build_compose_run_command(
-        workflow, environment, data_env=data_environment(workflow, {})
+        workflow, environment, data_env=data_environment(workflow, {}, choices)
     )
     docker_run_confirmed = confirm_docker_run(
         command, assume_yes=False, stdin=sys.stdin, stdout=sys.stdout
@@ -346,15 +359,18 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
         workflow,
         environment=environment,
         produce=produce,
+        optional_choices=choices,
         producers_of=catalog.producers_of,
         docker_run_confirmed=docker_run_confirmed,
     )
     rc = _report(workflow, result)
     if result.child_exit_code is not None:
         confirm_delete_consumed(
-            used_data_paths(workflow, {}), stdin=sys.stdin, stdout=sys.stdout
+            used_data_paths(workflow, {}, choices), stdin=sys.stdin, stdout=sys.stdout
         )
     if result.passed:
         _print_metrics(workflow)
+        if plan.switched_from:
+            print(switch_hint(plan, catalog))
     print()
     return rc
