@@ -19,6 +19,7 @@ from rich.cells import cell_len, set_cell_size
 from simple_term_menu import TerminalMenu
 
 from punch.catalog import CatalogError, load_catalog
+from punch.data_plan import Choice
 from punch.execution import (
     ExecutionResult,
     build_compose_run_command,
@@ -160,6 +161,14 @@ def _workflow_menu_rows(paths: List[Path]) -> tuple[List[str], str]:
 def _choose_workflow(paths: List[Path]) -> Path:
     rows, title = _workflow_menu_rows(paths)
     return paths[_select(rows, title)]
+
+
+def choose(choice: Choice) -> Optional[int]:
+    """Render a Choice with the shared arrow-key menu; Esc or no terminal → None."""
+    try:
+        return _select(list(choice.options), choice.title, cursor_index=choice.cursor)
+    except (_MenuCancelled, _MenuUnavailable):
+        return None
 
 
 def _read_base_url(path: Path) -> Optional[str]:

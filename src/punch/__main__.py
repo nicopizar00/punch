@@ -20,6 +20,8 @@ from pathlib import Path
 import socket
 from urllib.parse import urlparse
 
+from punch.data_plan import DataPlan, PlanStop, plan_data, switch_hint
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORTS_DIR = REPO_ROOT / "reports"
 STATE_DIR = REPORTS_DIR / "state"
@@ -184,7 +186,14 @@ def _effective_exit_code(result) -> int:
     return result.child_exit_code or 1
 
 
-def _evidence_result(workflow, result, *, skipped: bool = False) -> dict:
+def _evidence_result(
+    workflow,
+    result,
+    *,
+    skipped: bool = False,
+    switched_from: tuple[str, ...] = (),
+    data_sources: dict[str, str] | None = None,
+) -> dict:
     return {
         "test": workflow.name,
         "workflow": str(workflow.source_path.relative_to(workflow.working_directory)),
@@ -202,6 +211,8 @@ def _evidence_result(workflow, result, *, skipped: bool = False) -> dict:
             for dataset in result.datasets
         ],
         **({"skipped": True} if skipped else {}),
+        **({"switchedFrom": list(switched_from)} if switched_from else {}),
+        **({"dataSources": data_sources} if data_sources else {}),
     }
 
 
@@ -213,7 +224,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         execute_workflow,
         paths_collide,
         used_data_paths,
-        resolve_data_overrides,
+        data_sources,
+        resolve_data_args,
         validate_produce,
     )
     from punch.workflow import WorkflowError
@@ -245,6 +257,42 @@ def cmd_run(args: argparse.Namespace) -> int:
             continue
         runnable.append(workflow)
 
+    produce_args, data_args = list(args.produce), list(args.data)
+    plan: DataPlan | None = None
+    stopped_rc = 0
+    if (
+        args.selector != "all"
+        and len(runnable) == 1
+        and not args.no_input
+        and sys.stdin.isatty()
+    ):
+        from punch.menu import choose
+
+        selected = runnable[0]
+        try:
+            catalog = load_catalog(selected.source_path.parent)
+            overrides, preset = resolve_data_args(selected, data_args)
+        except (CatalogError, ValueError):
+            pass  # reported by the per-workflow loop below
+        else:
+            outcome = plan_data(
+                selected, catalog, overrides, preset, choose=choose, environment=os.environ
+            )
+            if isinstance(outcome, PlanStop):
+                print(f"[punch] {outcome.reason}", file=sys.stderr, flush=True)
+                results.append(_evidence_result(
+                    selected, ExecutionResult(selected.name, (), None, False, outcome.reason)
+                ))
+                runnable, stopped_rc = [], 1
+            else:
+                plan = outcome
+                if plan.switched_from:
+                    if produce_args or data_args:
+                        print(f"[punch] ignoring --produce/--data for {selected.name}", flush=True)
+                    produce_args, data_args = list(plan.produce), []
+                    workflows = runnable = [plan.workflow]
+    switched_from = plan.switched_from if plan is not None else ()
+
     protected_paths = [STATE_DIR / "punch-run.json"]
     protected_paths.extend(LOGS_DIR / f"k6-{workflow.name}.log" for workflow in runnable)
     if args.collect_logs:
@@ -256,7 +304,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if workflow.data is None:
             continue
         try:
-            produce = validate_produce(workflow, args.produce)
+            produce = validate_produce(workflow, produce_args)
         except ValueError:
             continue  # reported per workflow below
         for dataset in produce:
@@ -275,30 +323,41 @@ def cmd_run(args: argparse.Namespace) -> int:
     for workflow in runnable:
         try:
             catalog = load_catalog(workflow.source_path.parent)
-            produce = validate_produce(workflow, args.produce)
-            overrides = resolve_data_overrides(workflow, args.data)
+            produce = validate_produce(workflow, produce_args)
+            overrides, preset = resolve_data_args(workflow, data_args)
         except (CatalogError, ValueError) as error:
             print(f"[punch] {error}", file=sys.stderr, flush=True)
             results.append(_evidence_result(
-                workflow, ExecutionResult(workflow.name, (), None, False, str(error))
+                workflow,
+                ExecutionResult(workflow.name, (), None, False, str(error)),
+                switched_from=switched_from,
             ))
             overall_rc = overall_rc or 1
             if not args.keep_going:
                 break
             continue
+        choices = plan.optional_choices if plan is not None else preset
 
         result = execute_workflow(
             workflow,
             environment=os.environ,
             produce=produce,
             data_overrides=overrides,
+            optional_choices=choices,
             producers_of=catalog.producers_of,
             log_path=LOGS_DIR / f"k6-{workflow.name}.log",
         )
-        results.append(_evidence_result(workflow, result))
+        results.append(_evidence_result(
+            workflow,
+            result,
+            switched_from=switched_from,
+            data_sources=data_sources(workflow, overrides, choices),
+        ))
+        if result.passed and switched_from:
+            print(switch_hint(plan, catalog), flush=True)
         if result.child_exit_code is not None:
             confirm_delete_consumed(
-                used_data_paths(workflow, overrides), stdin=sys.stdin, stdout=sys.stdout
+                used_data_paths(workflow, overrides, choices), stdin=sys.stdin, stdout=sys.stdout
             )
         effective_exit_code = _effective_exit_code(result)
         if not result.passed and overall_rc == 0:
@@ -309,6 +368,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.collect_logs:
         _collect_service_logs()
 
+    overall_rc = overall_rc or stopped_rc
     _write_evidence({
         "command": "run",
         "tests": [workflow.name for workflow in workflows],
@@ -357,7 +417,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--produce", action="append", default=[], metavar="DATASET",
                        help="Write a declared dataset (repeatable, or 'all'). Without it no data file is written.")
     run_p.add_argument("--data", action="append", default=[], metavar="DATASET=PATH",
-                       help="Read a required dataset from PATH (beneath spec.data.directory).")
+                       help="Read a dataset from PATH (beneath spec.data.directory), or DATASET=default for an optional dataset's built-in data.")
+    run_p.add_argument("--no-input", action="store_true",
+                       help="Never open the data-source or producer pickers.")
 
     menu_p = sub.add_parser(
         "menu", help="Interactively pick and run a k6 workflow from a directory."
