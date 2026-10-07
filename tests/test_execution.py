@@ -408,7 +408,7 @@ class ExecutionTests(unittest.TestCase):
         args = self.args_path.read_text(encoding="utf-8").splitlines()
         self.assertFalse(any(a.startswith("DATA_CARTS_CSV=") for a in args))
         self.assertIn(
-            '[punch] optional dataset "carts" not present — scenario uses its default', out
+            '[punch] optional dataset "carts" not used — scenario uses its default', out
         )
 
     def test_optional_header_only_is_absent(self) -> None:
@@ -417,7 +417,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertTrue(result.passed, result.failure)
         args = self.args_path.read_text(encoding="utf-8").splitlines()
         self.assertFalse(any(a.startswith("DATA_CARTS_CSV=") for a in args))
-        self.assertIn('optional dataset "carts" not present', out)
+        self.assertIn('optional dataset "carts" not used', out)
 
     def test_optional_present_file_injects_container_path(self) -> None:
         self.write_carts("cartId,productId,sid\nc,p,s\n")
@@ -444,7 +444,7 @@ class ExecutionTests(unittest.TestCase):
         alt.write_text("cartId,productId,sid\n", encoding="utf-8")
         result, out = self.run_optional(overrides)
         self.assertTrue(result.passed, result.failure)
-        self.assertIn('optional dataset "carts" not present', out)
+        self.assertIn('optional dataset "carts" not used', out)
 
     def test_used_data_paths_covers_required_and_present_optional(self) -> None:
         from punch.execution import used_data_paths
@@ -452,6 +452,86 @@ class ExecutionTests(unittest.TestCase):
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         self.assertEqual(used_data_paths(self.optional_consumer, {}), {"carts": self.carts_path})
         self.assertEqual(used_data_paths(self.consumer, {}), {"carts": self.carts_path})
+
+    def run_optional_with(self, choices):
+        out = io.StringIO()
+        result = execute_workflow(
+            self.optional_consumer,
+            environment=self.env,
+            optional_choices=choices,
+            producers_of=lambda dataset: ("data-producer",),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        return result, out.getvalue()
+
+    def test_optional_choice_default_ignores_present_file(self) -> None:
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        result, out = self.run_optional_with({"carts": False})
+        self.assertTrue(result.passed, result.failure)
+        args = self.args_path.read_text(encoding="utf-8").splitlines()
+        self.assertFalse(any(a.startswith("DATA_CARTS_CSV=") for a in args))
+        self.assertIn('optional dataset "carts" not used', out)
+
+    def test_optional_choice_file_with_rows_is_injected(self) -> None:
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        result, _ = self.run_optional_with({"carts": True})
+        self.assertTrue(result.passed, result.failure)
+        self.assertIn(
+            "DATA_CARTS_CSV=/scripts/data/carts.csv",
+            self.args_path.read_text(encoding="utf-8").splitlines(),
+        )
+
+    def test_optional_choice_file_without_rows_fails_preflight(self) -> None:
+        result, _ = self.run_optional_with({"carts": True})
+        self.assertFalse(result.passed)
+        self.assertEqual(
+            result.failure,
+            'data-optional requires "carts"; produce it with: data-producer (--produce carts)',
+        )
+        self.assertFalse(self.args_path.exists())
+
+    def test_missing_datasets_follow_optional_choices(self) -> None:
+        from punch.execution import missing_datasets
+        self.assertEqual(missing_datasets(self.consumer, {}), ("carts",))
+        self.assertEqual(missing_datasets(self.optional_consumer, {}), ())
+        self.assertEqual(missing_datasets(self.optional_consumer, {}, {"carts": True}), ("carts",))
+        self.write_carts("cartId,productId,sid\n\n")
+        self.assertEqual(missing_datasets(self.consumer, {}), ("carts",))
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        self.assertEqual(missing_datasets(self.consumer, {}), ())
+
+    def test_data_row_count(self) -> None:
+        from punch.execution import data_row_count
+        self.assertEqual(data_row_count(self.carts_path), 0)
+        self.write_carts("cartId,productId,sid\nc,p,s\n\nd,q,t\n")
+        self.assertEqual(data_row_count(self.carts_path), 2)
+
+    def test_resolve_data_args_splits_default_from_paths(self) -> None:
+        from punch.execution import resolve_data_args
+        overrides, choices = resolve_data_args(self.optional_consumer, ["carts=default"])
+        self.assertEqual((overrides, choices), ({}, {"carts": False}))
+        overrides, choices = resolve_data_args(self.optional_consumer, ["carts=data/alt.csv"])
+        self.assertEqual(overrides, {"carts": self.root / "data" / "alt.csv"})
+        self.assertEqual(choices, {})
+
+    def test_resolve_data_args_rejects_default_for_required(self) -> None:
+        from punch.execution import resolve_data_args
+        with self.assertRaisesRegex(
+            ValueError, '--data carts=default: "carts" is not an optional dataset of data-consumer'
+        ):
+            resolve_data_args(self.consumer, ["carts=default"])
+
+    def test_data_sources_name_default_or_relative_path(self) -> None:
+        from punch.execution import data_sources
+        self.assertEqual(data_sources(self.optional_consumer, {}), {"carts": "default"})
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        self.assertEqual(data_sources(self.optional_consumer, {}), {"carts": "data/carts.csv"})
+        self.assertEqual(
+            data_sources(self.optional_consumer, {}, {"carts": False}), {"carts": "default"}
+        )
+        self.assertEqual(data_sources(self.consumer, {}), {"carts": "data/carts.csv"})
+        self.assertEqual(data_sources(self.no_csv_workflow, {}), {})
 
     def test_delete_prompt_is_skipped_without_a_tty(self) -> None:
         from punch.execution import confirm_delete_consumed

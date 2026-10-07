@@ -129,14 +129,6 @@ def required_data_paths(
     }
 
 
-def _has_data_rows(path: Path) -> bool:
-    if not path.is_file():
-        return False
-    with path.open(encoding="utf-8") as handle:
-        next(handle, None)  # header
-        return any(line.strip() for line in handle)
-
-
 def optional_data_paths(
     workflow: K6Workflow, overrides: Mapping[str, Path]
 ) -> dict[str, Path]:
@@ -148,21 +140,52 @@ def optional_data_paths(
     }
 
 
-def used_data_paths(workflow: K6Workflow, overrides: Mapping[str, Path]) -> dict[str, Path]:
-    """Required datasets plus optional ones whose file has data rows."""
+def data_row_count(path: Path) -> int:
+    """Non-blank rows after the header; 0 when the file is absent."""
+    if not path.is_file():
+        return 0
+    with path.open(encoding="utf-8") as handle:
+        next(handle, None)  # header
+        return sum(1 for line in handle if line.strip())
+
+
+def _has_data_rows(path: Path) -> bool:
+    return data_row_count(path) > 0
+
+
+def used_data_paths(
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    optional_choices: Mapping[str, bool] | None = None,
+) -> dict[str, Path]:
+    """Required datasets plus optional ones whose choice selects the file
+    (no choice: the file has data rows)."""
     used = required_data_paths(workflow, overrides)
+    choices = optional_choices or {}
     for dataset, path in optional_data_paths(workflow, overrides).items():
-        if _has_data_rows(path):
+        if choices.get(dataset, _has_data_rows(path)):
             used[dataset] = path
     return used
 
 
 def absent_optional_datasets(
-    workflow: K6Workflow, overrides: Mapping[str, Path]
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    optional_choices: Mapping[str, bool] | None = None,
 ) -> tuple[str, ...]:
+    used = used_data_paths(workflow, overrides, optional_choices)
+    return tuple(d for d in optional_data_paths(workflow, overrides) if d not in used)
+
+
+def missing_datasets(
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    optional_choices: Mapping[str, bool] | None = None,
+) -> tuple[str, ...]:
+    """Datasets this run reads whose file is absent or has no data rows."""
     return tuple(
         dataset
-        for dataset, path in optional_data_paths(workflow, overrides).items()
+        for dataset, path in used_data_paths(workflow, overrides, optional_choices).items()
         if not _has_data_rows(path)
     )
 
@@ -171,25 +194,72 @@ def preflight_requirements(
     workflow: K6Workflow,
     overrides: Mapping[str, Path],
     producers_of: Callable[[str], Sequence[str]],
+    optional_choices: Mapping[str, bool] | None = None,
 ) -> str | None:
-    for dataset, path in required_data_paths(workflow, overrides).items():
-        if not _has_data_rows(path):
-            producers = ", ".join(producers_of(dataset)) or "no known workflow"
-            return (
-                f'{workflow.name} requires "{dataset}"; '
-                f"produce it with: {producers} (--produce {dataset})"
-            )
+    for dataset in missing_datasets(workflow, overrides, optional_choices):
+        producers = ", ".join(producers_of(dataset)) or "no known workflow"
+        return (
+            f'{workflow.name} requires "{dataset}"; '
+            f"produce it with: {producers} (--produce {dataset})"
+        )
     return None
 
 
-def data_environment(workflow: K6Workflow, overrides: Mapping[str, Path]) -> dict[str, str]:
+def data_environment(
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    optional_choices: Mapping[str, bool] | None = None,
+) -> dict[str, str]:
     """Container paths of every used dataset, keyed DATA_<NAME>_CSV."""
     if workflow.data is None:
         return {}
     mounted_at = workflow.data.mounted_at.rstrip("/")
     return {
         data_env_name(dataset): f"{mounted_at}/{path.relative_to(workflow.data.directory).as_posix()}"
-        for dataset, path in used_data_paths(workflow, overrides).items()
+        for dataset, path in used_data_paths(workflow, overrides, optional_choices).items()
+    }
+
+
+DEFAULT_DATA = "default"
+
+
+def resolve_data_args(
+    workflow: K6Workflow, raw: Sequence[str]
+) -> tuple[dict[str, Path], dict[str, bool]]:
+    """Split `--data` into path overrides and `<dataset>=default` choices."""
+    paths: list[str] = []
+    choices: dict[str, bool] = {}
+    for item in raw:
+        dataset, separator, value = item.partition("=")
+        if separator and value == DEFAULT_DATA:
+            if workflow.data is None or dataset not in workflow.data.optional:
+                raise ValueError(
+                    f'--data {dataset}={DEFAULT_DATA}: "{dataset}" is not an optional '
+                    f"dataset of {workflow.name}"
+                )
+            choices[dataset] = False
+        else:
+            paths.append(item)
+    return resolve_data_overrides(workflow, paths), choices
+
+
+def data_sources(
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    optional_choices: Mapping[str, bool] | None = None,
+) -> dict[str, str]:
+    """Evidence: each declared input's path relative to the working directory,
+    or "default" when the scenario's built-in data is used."""
+    if workflow.data is None:
+        return {}
+    used = used_data_paths(workflow, overrides, optional_choices)
+    return {
+        dataset: (
+            used[dataset].relative_to(workflow.working_directory).as_posix()
+            if dataset in used
+            else DEFAULT_DATA
+        )
+        for dataset in (*workflow.data.requires, *workflow.data.optional)
     }
 
 
@@ -393,6 +463,7 @@ def execute_workflow(
     environment: Mapping[str, str],
     produce: Sequence[str] = (),
     data_overrides: Mapping[str, Path] | None = None,
+    optional_choices: Mapping[str, bool] | None = None,
     producers_of: Callable[[str], Sequence[str]] = lambda _dataset: (),
     docker_run_confirmed: bool = True,
     stdout: IO[str] | None = None,
@@ -400,7 +471,7 @@ def execute_workflow(
     log_path: Path | None = None,
 ) -> ExecutionResult:
     overrides = dict(data_overrides or {})
-    data_env = data_environment(workflow, overrides)
+    data_env = data_environment(workflow, overrides, optional_choices)
     command = build_compose_run_command(workflow, environment, data_env=data_env)
 
     def fail_before_start(failure: str) -> ExecutionResult:
@@ -410,7 +481,9 @@ def execute_workflow(
         opted = validate_produce(workflow, produce)
     except ValueError as error:
         return fail_before_start(str(error))
-    preflight_failure = preflight_requirements(workflow, overrides, producers_of)
+    preflight_failure = preflight_requirements(
+        workflow, overrides, producers_of, optional_choices
+    )
     if preflight_failure is not None:
         return fail_before_start(preflight_failure)
     if not docker_run_confirmed:
@@ -425,9 +498,9 @@ def execute_workflow(
 
     output = stdout if stdout is not None else sys.stdout
     errors = stderr if stderr is not None else sys.stderr
-    for dataset in absent_optional_datasets(workflow, overrides):
+    for dataset in absent_optional_datasets(workflow, overrides, optional_choices):
         output.write(
-            f'[punch] optional dataset "{dataset}" not present — scenario uses its default\n'
+            f'[punch] optional dataset "{dataset}" not used — scenario uses its default\n'
         )
     sinks: dict[str, _DatasetSink] = {}
     log_file: IO[str] | None = None
