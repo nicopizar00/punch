@@ -2,46 +2,45 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Before any Docker prompt, Punch (TTY only) lets the operator pick
-each optional dataset's source and, when data the run reads is missing, pick a
-producer to run instead — recommended one preselected — still launching one
-`docker compose run`.
+**Goal:** Before any Docker prompt, Punch lets the operator pick each optional
+dataset's source and, when data the run reads is missing, pick a producer to
+run instead — recommended one preselected — with CLI equivalents for every
+choice and still one `docker compose run`.
 
 **Architecture:** YAML gains optional `produces[].recommended`. `execution`
-learns `optional_choices` (dataset → read file / use default) end-to-end, a
-generic picker contract (`Choice` → index), and one stdlib-only walk
-(`plan_data`) that applies the same per-workflow step to the selected
-workflow and to each picked producer. `menu.choose` is the only terminal
-implementation; `punch run` and the `punch` menu share it.
+gains data primitives (`optional_choices`, `missing_datasets`,
+`data_row_count`, `resolve_data_args`, `data_sources`). A new stdlib-only
+`punch.data_plan` module owns the picker contract (`Choice`), the walk
+(`plan_data` → `DataPlan | PlanStop`), labels, and the hint. `menu.choose` is
+the only terminal picker; `punch run` and the `punch` menu share it.
 
 **Tech Stack:** Python 3.10+, PyYAML, simple-term-menu, rich; `unittest`.
 
-**Spec:** `docs/specs/spec-consumer-producer-switch.md` (rev 3).
+**Spec:** `docs/specs/spec-consumer-producer-switch.md` (rev 4).
 
 ## Global Constraints
 
 - At most one `docker compose run` per invocation; a replaced workflow never runs afterward.
-- "Has data" = file exists with ≥1 row after the header.
+- "Has data" = file exists with ≥1 non-blank row after the header.
 - No workflow or dataset name literal in `src/punch/*.py`; everything from YAML via the catalog.
-- Only schema change: optional boolean `spec.data.produces[].recommended` (default `false`). `targets` unchanged and unused by this feature.
+- Only schema change: optional boolean `spec.data.produces[].recommended` (default `false`). `targets` unchanged and unused here.
 - Several recommended producers of one dataset → first by workflow name; no error.
-- Pickers only with a TTY stdin; non-TTY and `all` keep today's behavior.
-- `optional_choices=None` everywhere means today's automatic rule.
+- Pickers only with a TTY stdin and without `--no-input`; `all` never.
+- `optional_choices=None` (or `{}`) everywhere means today's automatic rule.
 - `execute_workflow` gains no prompts; preflight message text unchanged.
-- Parent repo `scripts/pg/k6runner.py` / `./dev perf:*` untouched. No `punch doctor` change.
+- `punch.data_plan` imports only stdlib and `punch.*` (no rich / simple-term-menu).
+- Parent `scripts/pg/k6runner.py` untouched and must still work. No `punch doctor` change.
 - No AI attribution in commits.
 
 ## Review Focus
 
-1. **Test runner with a real TTY on stdin** — `punch run` tests leaving `sys.stdin` unpatched would open pickers; expected: CLI tests pin stdin to a non-TTY stream (Task 5 setUp).
-2. **Existing menu tests that run a workflow with missing required or optional data** — each picker consumes a `TerminalMenu`; expected: those tests updated with the extra selection (Task 6).
-3. **Optional dataset chosen as "file" while the file has no rows** — expected: producer picker, not a silent default (Task 4 `test_optional_file_without_rows_offers_producers`).
-4. **`--data` override for an optional dataset** — expected: no source picker for it, file used (Task 4 `test_override_skips_source_picker`).
-5. **Picked producer missing its own required environment** — expected: existing env failure, evidence still has `switchedFrom` (Task 5 `test_switched_producer_missing_env_reports_switch`).
+1. **Test runner with a real TTY on stdin** — CLI tests pin stdin to a non-TTY stream (Task 5 setUp) so a terminal-launched suite never opens a picker.
+2. **Existing menu tests running a workflow with missing data** — each picker consumes a `TerminalMenu`; the one affected test is updated (Task 6).
+3. **Optional file chosen while empty** — expected: producer picker, not silent default (Task 4 `test_optional_file_without_rows_offers_producers`).
+4. **`--data` override / `=default` presets in interactive mode** — expected: no source picker for those datasets (Task 4 `test_presets_skip_source_picker`; Task 5 `test_data_default_skips_picker_in_tty`).
+5. **Deprecated parent glue keeps working** — expected: `pnpm pg:test` passes and `pg.k6runner` imports after the signature changes (Task 7 Step 8).
 
 ## Test command
-
-Host Python may lack `rich`; create a scratch venv once:
 
 ```bash
 cd vendor/punch
@@ -90,7 +89,7 @@ python3 -m venv /tmp/punch-venv && /tmp/punch-venv/bin/pip install -q -r require
 Run: `PY -m unittest tests.test_workflow -v`
 Expected: 3 failures/errors (no attribute `recommended`; unknown field `recommended`).
 
-- [ ] **Step 3: Implement** — in `src/punch/workflow.py`:
+- [ ] **Step 3: Implement** — `src/punch/workflow.py`:
 
 ```python
 @dataclass(frozen=True)
@@ -116,9 +115,7 @@ In the `for index, raw in enumerate(raw_produces):` loop, before
 
 and pass `recommended=recommended,` as the last `DataProduct(...)` argument.
 
-- [ ] **Step 4: Run to verify pass**
-
-Run: `PY -m unittest tests.test_workflow -v` — Expected: all OK
+- [ ] **Step 4: Run to verify pass** — `PY -m unittest tests.test_workflow -v` → all OK
 
 - [ ] **Step 5: Commit**
 
@@ -137,7 +134,7 @@ git commit -m "feat(workflow): optional recommended flag on produced datasets"
 
 **Interfaces:**
 - Consumes: `DataProduct.recommended` (Task 1).
-- Produces: `WorkflowCatalog.recommended_producer(self, dataset: str) -> str | None` — first by name among `producers_of(dataset)` whose product is `recommended`.
+- Produces: `WorkflowCatalog.recommended_producer(self, dataset: str) -> str | None`.
 
 - [ ] **Step 1: Write the failing tests** — add to `CatalogTests`:
 
@@ -167,10 +164,7 @@ git commit -m "feat(workflow): optional recommended flag on produced datasets"
         self.assertEqual(load_catalog(self.root).recommended_producer("carts"), "mm-producer")
 ```
 
-- [ ] **Step 2: Run to verify failure**
-
-Run: `PY -m unittest tests.test_catalog -v`
-Expected: errors `no attribute 'recommended_producer'`.
+- [ ] **Step 2: Run to verify failure** — `PY -m unittest tests.test_catalog -v` → errors `no attribute 'recommended_producer'`.
 
 - [ ] **Step 3: Implement** — in `WorkflowCatalog`, after `consumers_of`:
 
@@ -183,9 +177,7 @@ Expected: errors `no attribute 'recommended_producer'`.
         return None
 ```
 
-- [ ] **Step 4: Run to verify pass**
-
-Run: `PY -m unittest tests.test_catalog -v` — Expected: all OK
+- [ ] **Step 4: Run to verify pass** — `PY -m unittest tests.test_catalog -v` → all OK
 
 - [ ] **Step 5: Commit**
 
@@ -196,14 +188,14 @@ git commit -m "feat(catalog): resolve the recommended producer of a dataset"
 
 ---
 
-### Task 3: Optional choices through `execution`
+### Task 3: Data primitives in `execution`
 
 **Files:**
-- Modify: `src/punch/execution.py` (`used_data_paths`, `absent_optional_datasets`, `data_environment`, `preflight_requirements`, `execute_workflow`; new `missing_datasets`, `data_row_count`)
+- Modify: `src/punch/execution.py`
 - Test: `tests/test_execution.py`
 
 **Interfaces:**
-- Produces (all `optional_choices: Mapping[str, bool] | None = None`, `None` = today's rule; a key's `True` = read the data path, `False` = default):
+- Produces (`optional_choices: Mapping[str, bool] | None = None`; key `True` = read path, `False` = default, absent = automatic rule):
   - `data_row_count(path: Path) -> int`
   - `used_data_paths(workflow, overrides, optional_choices=None) -> dict[str, Path]`
   - `absent_optional_datasets(workflow, overrides, optional_choices=None) -> tuple[str, ...]`
@@ -211,20 +203,18 @@ git commit -m "feat(catalog): resolve the recommended producer of a dataset"
   - `data_environment(workflow, overrides, optional_choices=None) -> dict[str, str]`
   - `preflight_requirements(workflow, overrides, producers_of, optional_choices=None) -> str | None`
   - `execute_workflow(..., optional_choices: Mapping[str, bool] | None = None, ...)`
+  - `DEFAULT_DATA = "default"`
+  - `resolve_data_args(workflow, raw: Sequence[str]) -> tuple[dict[str, Path], dict[str, bool]]`
+  - `data_sources(workflow, overrides, optional_choices=None) -> dict[str, str]`
 
-- [ ] **Step 1: Update the absent-optional note assertions** — in
-  `tests/test_execution.py` replace every `not present` in the three
-  optional tests (`test_optional_missing_file_runs_without_env_and_prints_note`,
-  `test_optional_header_only_is_absent`,
-  `test_optional_override_is_accepted_and_empty_override_is_absent`) with
-  `not used`:
+- [ ] **Step 1: Update the absent-optional note assertions**
 
 ```bash
 sed -i '' 's/optional dataset "carts" not present/optional dataset "carts" not used/' tests/test_execution.py
 ```
 
-- [ ] **Step 2: Write the failing tests** — add to `ExecutionTests` (after
-  `test_used_data_paths_covers_required_and_present_optional`):
+- [ ] **Step 2: Write the failing tests** — add to `ExecutionTests` after
+  `test_used_data_paths_covers_required_and_present_optional`:
 
 ```python
     def run_optional_with(self, choices):
@@ -280,12 +270,35 @@ sed -i '' 's/optional dataset "carts" not present/optional dataset "carts" not u
         self.assertEqual(data_row_count(self.carts_path), 0)
         self.write_carts("cartId,productId,sid\nc,p,s\n\nd,q,t\n")
         self.assertEqual(data_row_count(self.carts_path), 2)
+
+    def test_resolve_data_args_splits_default_from_paths(self) -> None:
+        from punch.execution import resolve_data_args
+        overrides, choices = resolve_data_args(self.optional_consumer, ["carts=default"])
+        self.assertEqual((overrides, choices), ({}, {"carts": False}))
+        overrides, choices = resolve_data_args(self.optional_consumer, ["carts=data/alt.csv"])
+        self.assertEqual(overrides, {"carts": self.root / "data" / "alt.csv"})
+        self.assertEqual(choices, {})
+
+    def test_resolve_data_args_rejects_default_for_required(self) -> None:
+        from punch.execution import resolve_data_args
+        with self.assertRaisesRegex(
+            ValueError, '--data carts=default: "carts" is not an optional dataset of data-consumer'
+        ):
+            resolve_data_args(self.consumer, ["carts=default"])
+
+    def test_data_sources_name_default_or_relative_path(self) -> None:
+        from punch.execution import data_sources
+        self.assertEqual(data_sources(self.optional_consumer, {}), {"carts": "default"})
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        self.assertEqual(data_sources(self.optional_consumer, {}), {"carts": "data/carts.csv"})
+        self.assertEqual(
+            data_sources(self.optional_consumer, {}, {"carts": False}), {"carts": "default"}
+        )
+        self.assertEqual(data_sources(self.consumer, {}), {"carts": "data/carts.csv"})
+        self.assertEqual(data_sources(self.no_csv_workflow, {}), {})
 ```
 
-- [ ] **Step 3: Run to verify failure**
-
-Run: `PY -m unittest tests.test_execution -v`
-Expected: new tests error (`unexpected keyword argument 'optional_choices'`, import errors); the three edited tests fail (`not used` not found).
+- [ ] **Step 3: Run to verify failure** — `PY -m unittest tests.test_execution -v` → new tests error (`unexpected keyword argument 'optional_choices'`, import errors); the three edited tests fail.
 
 - [ ] **Step 4: Implement** — in `src/punch/execution.py`, replace
   `_has_data_rows`, `used_data_paths`, `absent_optional_datasets`,
@@ -370,11 +383,53 @@ def data_environment(
         data_env_name(dataset): f"{mounted_at}/{path.relative_to(workflow.data.directory).as_posix()}"
         for dataset, path in used_data_paths(workflow, overrides, optional_choices).items()
     }
+
+
+DEFAULT_DATA = "default"
+
+
+def resolve_data_args(
+    workflow: K6Workflow, raw: Sequence[str]
+) -> tuple[dict[str, Path], dict[str, bool]]:
+    """Split `--data` into path overrides and `<dataset>=default` choices."""
+    paths: list[str] = []
+    choices: dict[str, bool] = {}
+    for item in raw:
+        dataset, separator, value = item.partition("=")
+        if separator and value == DEFAULT_DATA:
+            if workflow.data is None or dataset not in workflow.data.optional:
+                raise ValueError(
+                    f'--data {dataset}={DEFAULT_DATA}: "{dataset}" is not an optional '
+                    f"dataset of {workflow.name}"
+                )
+            choices[dataset] = False
+        else:
+            paths.append(item)
+    return resolve_data_overrides(workflow, paths), choices
+
+
+def data_sources(
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    optional_choices: Mapping[str, bool] | None = None,
+) -> dict[str, str]:
+    """Evidence: each declared input's path relative to the working directory,
+    or "default" when the scenario's built-in data is used."""
+    if workflow.data is None:
+        return {}
+    used = used_data_paths(workflow, overrides, optional_choices)
+    return {
+        dataset: (
+            used[dataset].relative_to(workflow.working_directory).as_posix()
+            if dataset in used
+            else DEFAULT_DATA
+        )
+        for dataset in (*workflow.data.requires, *workflow.data.optional)
+    }
 ```
 
-In `execute_workflow`: add parameter
-`optional_choices: Mapping[str, bool] | None = None,` after `data_overrides`;
-pass `optional_choices` to `data_environment(...)`,
+In `execute_workflow`: add `optional_choices: Mapping[str, bool] | None = None,`
+after `data_overrides`; pass it to `data_environment(...)`,
 `preflight_requirements(...)` (4th argument), and
 `absent_optional_datasets(...)`; change the note to:
 
@@ -384,51 +439,61 @@ pass `optional_choices` to `data_environment(...)`,
         )
 ```
 
-- [ ] **Step 5: Run to verify pass**
-
-Run: `PY -m unittest tests.test_execution -v` — Expected: all OK
+- [ ] **Step 5: Run to verify pass** — `PY -m unittest tests.test_execution -v` → all OK
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/punch/execution.py tests/test_execution.py
-git commit -m "feat(execution): carry optional dataset choices through a run"
+git commit -m "feat(execution): optional dataset choices, row counts, data sources"
 ```
 
 ---
 
-### Task 4: Generic picker contract and `plan_data` walk
+### Task 4: `punch.data_plan` module
 
 **Files:**
-- Modify: `src/punch/execution.py`
-- Test: `tests/test_execution.py`
+- Create: `src/punch/data_plan.py`
+- Test: `tests/test_data_plan.py`
 
 **Interfaces:**
-- Consumes: Task 2 `recommended_producer`; Task 3 `missing_datasets`, `used_data_paths`, `optional_data_paths`, `data_row_count`.
+- Consumes: Task 2 `recommended_producer`; Task 3 `data_row_count`, `missing_datasets`, `used_data_paths`; existing `optional_data_paths`, `K6Workflow.required_environment`, `K6Workflow.working_directory`.
 - Produces:
-  - `@dataclass(frozen=True) class Choice: title: str; options: tuple[str, ...]; cursor: int = 0`
-  - `Chooser = Callable[[Choice], "int | None"]`
-  - `@dataclass(frozen=True) class DataPlan: workflow: K6Workflow; overrides: Mapping[str, Path]; optional_choices: Mapping[str, bool]; produce: tuple[str, ...] = (); switched_from: tuple[str, ...] = ()`
-  - `plan_data(workflow, catalog, overrides, *, choose: Chooser, stdout: IO[str]) -> DataPlan | None`
-  - `switch_hint(plan: DataPlan) -> str`
-  - Labels: source picker options `"default (built-in)"` and `"<rel> (<N> rows)"` / `"<rel> (no rows)"`; producer options `"<name>"` / `"<name>  (recommended)"`; `<rel>` = path relative to the workflow's working directory.
+  - `CANCELED = "data selection canceled"`, `DEFAULT_SOURCE = "default (built-in)"`
+  - `Choice(title: str, options: tuple[str, ...], cursor: int = 0)` (frozen)
+  - `Chooser = Callable[[Choice], int | None]`
+  - `DataPlan(workflow, overrides={}, optional_choices={}, produce=(), switched_from=())` (frozen)
+  - `PlanStop(reason: str, canceled: bool = False)` (frozen)
+  - `plan_data(workflow, catalog, overrides, optional_choices, *, choose: Chooser, environment: Mapping[str, str]) -> DataPlan | PlanStop`
+  - `switch_hint(plan: DataPlan, catalog: WorkflowCatalog) -> str`
 
-- [ ] **Step 1: Write the failing tests** — add imports:
+- [ ] **Step 1: Write the failing tests** — create `tests/test_data_plan.py`:
 
 ```python
+from __future__ import annotations
+
+import shutil
+import sys
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 from punch.catalog import load_catalog
-from punch.execution import (
+from punch.data_plan import (
+    CANCELED,
     Choice,
-    build_compose_run_command,
-    execute_workflow,
+    DataPlan,
+    PlanStop,
     plan_data,
     switch_hint,
 )
-```
 
-Append:
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+ENV = {"RUN_ID": "1"}  # data-producer requires RUN_ID
 
-```python
+
 class ScriptedChooser:
     """Records each Choice; answers with an option label (or None = Esc)."""
 
@@ -449,9 +514,8 @@ class PlanDataTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
-        fixtures = Path(__file__).resolve().parent / "fixtures"
         for name in ("docker-compose.yml", "data-output.yaml", "data-input.yaml"):
-            shutil.copy(fixtures / name, self.root / name)
+            shutil.copy(FIXTURES / name, self.root / name)
         self.carts = self.root / "data" / "carts.csv"
 
     def tearDown(self) -> None:
@@ -487,34 +551,35 @@ class PlanDataTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def make_optional(self) -> None:
+        self.edit("data-input.yaml", "requires: [carts]", "optional: [carts]")
+
     def write_carts(self, text: str) -> None:
         self.carts.parent.mkdir(parents=True, exist_ok=True)
         self.carts.write_text(text, encoding="utf-8")
 
-    def plan(self, name: str, chooser: ScriptedChooser, overrides=None):
+    def plan(self, name, chooser, overrides=None, choices=None, environment=ENV):
         catalog = load_catalog(self.root)
-        stdout = io.StringIO()
-        plan = plan_data(
-            catalog.workflows[name], catalog, overrides or {},
-            choose=chooser, stdout=stdout,
+        return plan_data(
+            catalog.workflows[name], catalog, overrides or {}, choices or {},
+            choose=chooser, environment=environment,
         )
-        return plan, stdout.getvalue()
 
     # --- required data ---------------------------------------------------
 
     def test_present_required_data_asks_nothing(self) -> None:
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         chooser = ScriptedChooser()
-        plan, _ = self.plan("data-consumer", chooser)
+        plan = self.plan("data-consumer", chooser)
         self.assertEqual(chooser.choices, [])
+        self.assertIsInstance(plan, DataPlan)
         self.assertEqual(plan.workflow.name, "data-consumer")
         self.assertEqual((plan.produce, plan.switched_from), ((), ()))
-        self.assertEqual(dict(plan.optional_choices), {})
 
     def test_producer_picker_lists_all_with_recommended_preselected(self) -> None:
         self.add_recommended_producer()
         chooser = ScriptedChooser("data-producer")
-        plan, _ = self.plan("data-consumer", chooser)
+        plan = self.plan("data-consumer", chooser)
         [choice] = chooser.choices
         self.assertEqual(
             choice.title,
@@ -527,7 +592,15 @@ class PlanDataTests(unittest.TestCase):
         self.assertEqual(plan.produce, ("carts",))
         self.assertEqual(plan.switched_from, ("data-consumer",))
         self.assertEqual(dict(plan.overrides), {})
-        self.assertEqual(switch_hint(plan), "[punch] carts ready; run data-consumer next.")
+
+    def test_producer_tags_missing_required_environment(self) -> None:
+        self.add_recommended_producer()
+        chooser = ScriptedChooser("data-producer  (needs RUN_ID)")
+        self.plan("data-consumer", chooser, environment={})
+        self.assertEqual(
+            chooser.choices[0].options,
+            ("data-producer  (needs RUN_ID)", "other-producer  (recommended, needs RUN_ID)"),
+        )
 
     def test_producer_picker_without_recommendation_starts_first(self) -> None:
         chooser = ScriptedChooser("data-producer")
@@ -535,39 +608,44 @@ class PlanDataTests(unittest.TestCase):
         self.assertEqual(chooser.choices[0].options, ("data-producer",))
         self.assertEqual(chooser.choices[0].cursor, 0)
 
-    def test_cancel_producer_picker_returns_none(self) -> None:
-        plan, _ = self.plan("data-consumer", ScriptedChooser(None))
-        self.assertIsNone(plan)
+    def test_cancel_producer_picker_stops_with_preflight_detail(self) -> None:
+        stop = self.plan("data-consumer", ScriptedChooser(None))
+        self.assertEqual(
+            stop,
+            PlanStop(
+                f'{CANCELED}; "data-consumer" needs "carts" (no rows at data/carts.csv) '
+                "— produce it with: data-producer (--produce carts)",
+                canceled=True,
+            ),
+        )
 
     def test_chain_walks_to_root_producer(self) -> None:
         self.add_second_hop()
         chooser = ScriptedChooser("data-consumer", "data-producer")
-        plan, _ = self.plan("data-status", chooser)
+        plan = self.plan("data-status", chooser)
         self.assertEqual(len(chooser.choices), 2)
         self.assertTrue(chooser.choices[1].title.startswith('"data-consumer" needs "carts"'))
         self.assertEqual(plan.workflow.name, "data-producer")
         self.assertEqual(plan.produce, ("carts",))
         self.assertEqual(plan.switched_from, ("data-status", "data-consumer"))
-        self.assertEqual(switch_hint(plan), "[punch] carts ready; run data-status next.")
 
     def test_chain_stops_at_first_workflow_with_data(self) -> None:
         self.add_second_hop()
         self.write_carts("cartId,productId,sid\nc,p,s\n")
-        plan, _ = self.plan("data-status", ScriptedChooser("data-consumer"))
+        plan = self.plan("data-status", ScriptedChooser("data-consumer"))
         self.assertEqual(plan.workflow.name, "data-consumer")
         self.assertEqual(plan.produce, ("orders",))
 
-    def test_cycle_returns_none_and_reports(self) -> None:
+    def test_cycle_stops(self) -> None:
         self.add_second_hop()
         self.edit("data-output.yaml", "    produces:", "    requires: [orders]\n    produces:")
         self.edit("data-input.yaml", "targets: [data-status]",
                   "targets: [data-status, data-producer]")
         chooser = ScriptedChooser("data-consumer", "data-producer", "data-consumer")
-        plan, output = self.plan("data-status", chooser)
-        self.assertIsNone(plan)
-        self.assertIn(
-            "[punch] producer cycle: data-status → data-consumer → data-producer → data-consumer",
-            output,
+        stop = self.plan("data-status", chooser)
+        self.assertEqual(
+            stop,
+            PlanStop("producer cycle: data-status → data-consumer → data-producer → data-consumer"),
         )
 
     def test_producer_step_ignores_selected_workflow_overrides(self) -> None:
@@ -576,20 +654,17 @@ class PlanDataTests(unittest.TestCase):
         empty.parent.mkdir(parents=True)
         empty.write_text("orderId\n", encoding="utf-8")
         chooser = ScriptedChooser("data-consumer", "data-producer")
-        plan, _ = self.plan("data-status", chooser, {"orders": empty})
+        plan = self.plan("data-status", chooser, overrides={"orders": empty})
         self.assertIn("no rows at data/carts.csv", chooser.choices[1].title)
         self.assertEqual(plan.workflow.name, "data-producer")
 
     # --- optional data ---------------------------------------------------
 
-    def make_optional(self) -> None:
-        self.edit("data-input.yaml", "requires: [carts]", "optional: [carts]")
-
-    def test_source_picker_always_offered_with_default_first(self) -> None:
+    def test_source_picker_with_default_first(self) -> None:
         self.make_optional()
         self.write_carts("cartId,productId,sid\nc,p,s\nd,q,t\n")
         chooser = ScriptedChooser("default (built-in)")
-        plan, _ = self.plan("data-consumer", chooser)
+        plan = self.plan("data-consumer", chooser)
         [choice] = chooser.choices
         self.assertEqual(
             choice.title, '"data-consumer" can read "carts" — pick a source (Esc cancels)'
@@ -597,63 +672,105 @@ class PlanDataTests(unittest.TestCase):
         self.assertEqual(choice.options, ("default (built-in)", "data/carts.csv (2 rows)"))
         self.assertEqual(choice.cursor, 0)
         self.assertEqual(dict(plan.optional_choices), {"carts": False})
-        self.assertEqual(plan.workflow.name, "data-consumer")
 
     def test_source_picker_file_with_rows(self) -> None:
         self.make_optional()
         self.write_carts("cartId,productId,sid\nc,p,s\n")
-        plan, _ = self.plan("data-consumer", ScriptedChooser("data/carts.csv (1 rows)"))
+        plan = self.plan("data-consumer", ScriptedChooser("data/carts.csv (1 rows)"))
         self.assertEqual(dict(plan.optional_choices), {"carts": True})
 
     def test_optional_file_without_rows_offers_producers(self) -> None:
         self.make_optional()
         chooser = ScriptedChooser("data/carts.csv (no rows)", "data-producer")
-        plan, _ = self.plan("data-consumer", chooser)
+        plan = self.plan("data-consumer", chooser)
         self.assertEqual(chooser.choices[0].options[1], "data/carts.csv (no rows)")
         self.assertEqual(plan.workflow.name, "data-producer")
         self.assertEqual(plan.produce, ("carts",))
 
-    def test_override_skips_source_picker(self) -> None:
+    def test_optional_without_rows_or_producer_defaults_silently(self) -> None:
+        self.make_optional()
+        (self.root / "data-output.yaml").unlink()
+        chooser = ScriptedChooser()
+        plan = self.plan("data-consumer", chooser)
+        self.assertEqual(chooser.choices, [])
+        self.assertEqual(dict(plan.optional_choices), {"carts": False})
+
+    def test_presets_skip_source_picker(self) -> None:
         self.make_optional()
         alternate = self.root / "data" / "alt.csv"
         alternate.parent.mkdir(parents=True)
         alternate.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
         chooser = ScriptedChooser()
-        plan, _ = self.plan("data-consumer", chooser, {"carts": alternate})
+        plan = self.plan("data-consumer", chooser, overrides={"carts": alternate})
         self.assertEqual(chooser.choices, [])
-        self.assertEqual(dict(plan.optional_choices), {"carts": True})
         self.assertEqual(dict(plan.overrides), {"carts": alternate})
+        plan = self.plan("data-consumer", chooser, choices={"carts": False})
+        self.assertEqual(chooser.choices, [])
+        self.assertEqual(dict(plan.optional_choices), {"carts": False})
 
-    def test_cancel_source_picker_returns_none(self) -> None:
+    def test_cancel_source_picker(self) -> None:
         self.make_optional()
-        plan, _ = self.plan("data-consumer", ScriptedChooser(None))
-        self.assertIsNone(plan)
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        self.assertEqual(
+            self.plan("data-consumer", ScriptedChooser(None)), PlanStop(CANCELED, canceled=True)
+        )
+
+    # --- hint ------------------------------------------------------------
+
+    def test_switch_hint_names_origin_and_what_it_still_misses(self) -> None:
+        self.add_second_hop()
+        catalog = load_catalog(self.root)
+        plan = DataPlan(catalog.workflows["data-producer"], produce=("carts",),
+                        switched_from=("data-status", "data-consumer"))
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        self.assertEqual(
+            switch_hint(plan, catalog),
+            "[punch] carts ready; run data-status next (still missing: orders).",
+        )
+        plan = DataPlan(catalog.workflows["data-producer"], produce=("carts",),
+                        switched_from=("data-consumer",))
+        self.assertEqual(switch_hint(plan, catalog), "[punch] carts ready; run data-consumer next.")
+
+
+if __name__ == "__main__":
+    unittest.main()
 ```
 
-- [ ] **Step 2: Run to verify failure**
+Note `test_optional_without_rows_or_producer_defaults_silently`: deleting
+the only producer is valid for the catalog because an optional dataset needs
+no producer.
 
-Run: `PY -m unittest tests.test_execution -v`
-Expected: import error `cannot import name 'Choice'`.
+- [ ] **Step 2: Run to verify failure** — `PY -m unittest tests.test_data_plan -v` → `ModuleNotFoundError: No module named 'punch.data_plan'`.
 
-- [ ] **Step 3: Implement** — in `src/punch/execution.py`:
-
-Imports:
+- [ ] **Step 3: Implement** — create `src/punch/data_plan.py`:
 
 ```python
+"""Settle every data source a workflow reads before Docker runs.
+
+Standard-library only. Every workflow, dataset, and environment name shown
+comes from workflow YAML through the catalog. The picker is a parameter, so
+`punch run` and the `punch` menu share one walk.
+"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import IO, TYPE_CHECKING, Callable, Mapping, Sequence
-```
+from pathlib import Path
+from typing import Callable, Mapping
 
-after `from punch.workflow import ...`:
+from punch.catalog import WorkflowCatalog
+from punch.execution import (
+    data_row_count,
+    missing_datasets,
+    optional_data_paths,
+    used_data_paths,
+)
+from punch.workflow import K6Workflow
 
-```python
-if TYPE_CHECKING:
-    from punch.catalog import WorkflowCatalog
-```
+CANCELED = "data selection canceled"
+DEFAULT_SOURCE = "default (built-in)"
 
-After `ExecutionResult`:
 
-```python
 @dataclass(frozen=True)
 class Choice:
     """One picker question; a Chooser answers with an option index or None (Esc)."""
@@ -675,13 +792,14 @@ class DataPlan:
     optional_choices: Mapping[str, bool] = field(default_factory=dict)
     produce: tuple[str, ...] = ()
     switched_from: tuple[str, ...] = ()
-```
 
-After `preflight_requirements`:
 
-```python
-DEFAULT_SOURCE = "default (built-in)"
-RECOMMENDED_SUFFIX = "  (recommended)"
+@dataclass(frozen=True)
+class PlanStop:
+    """Why nothing will run; `canceled` when the operator pressed Esc."""
+
+    reason: str
+    canceled: bool = False
 
 
 def _relative(workflow: K6Workflow, path: Path) -> str:
@@ -691,19 +809,27 @@ def _relative(workflow: K6Workflow, path: Path) -> str:
         return str(path)
 
 
-def _choose_optional_sources(
-    workflow: K6Workflow, overrides: Mapping[str, Path], choose: Chooser
+def _choose_sources(
+    workflow: K6Workflow,
+    overrides: Mapping[str, Path],
+    preset: Mapping[str, bool],
+    catalog: WorkflowCatalog,
+    choose: Chooser,
 ) -> dict[str, bool] | None:
-    choices: dict[str, bool] = {}
+    choices = dict(preset)
     for dataset, path in optional_data_paths(workflow, overrides).items():
-        if dataset in overrides:
-            choices[dataset] = True
+        if dataset in choices or dataset in overrides:
             continue
         rows = data_row_count(path)
-        file_option = f"{_relative(workflow, path)} ({f'{rows} rows' if rows else 'no rows'})"
+        if not rows and not catalog.producers_of(dataset):
+            choices[dataset] = False  # only the default is available
+            continue
         index = choose(Choice(
             title=f'"{workflow.name}" can read "{dataset}" — pick a source (Esc cancels)',
-            options=(DEFAULT_SOURCE, file_option),
+            options=(
+                DEFAULT_SOURCE,
+                f"{_relative(workflow, path)} ({f'{rows} rows' if rows else 'no rows'})",
+            ),
         ))
         if index is None:
             return None
@@ -711,79 +837,82 @@ def _choose_optional_sources(
     return choices
 
 
-def _choose_producer(
-    workflow: K6Workflow,
-    dataset: str,
-    path: Path,
-    catalog: WorkflowCatalog,
-    choose: Chooser,
-) -> str | None:
-    producers = catalog.producers_of(dataset)
-    if not producers:
-        return None
-    recommended = catalog.recommended_producer(dataset)
-    index = choose(Choice(
-        title=(
-            f'"{workflow.name}" needs "{dataset}" (no rows at {_relative(workflow, path)}). '
-            "Run a producer instead? (Esc cancels)"
-        ),
-        options=tuple(
-            f"{name}{RECOMMENDED_SUFFIX}" if name == recommended else name
-            for name in producers
-        ),
-        cursor=producers.index(recommended) if recommended else 0,
-    ))
-    return None if index is None else producers[index]
+def _producer_option(
+    name: str, recommended: str | None, catalog: WorkflowCatalog, environment: Mapping[str, str]
+) -> str:
+    tags = ["recommended"] if name == recommended else []
+    missing_env = [
+        variable for variable in catalog.workflows[name].required_environment
+        if not environment.get(variable)
+    ]
+    if missing_env:
+        tags.append(f"needs {', '.join(missing_env)}")
+    return f"{name}  ({', '.join(tags)})" if tags else name
 
 
 def plan_data(
     workflow: K6Workflow,
     catalog: WorkflowCatalog,
     overrides: Mapping[str, Path],
+    optional_choices: Mapping[str, bool],
     *,
     choose: Chooser,
-    stdout: IO[str],
-) -> DataPlan | None:
-    """Settle every data source before Docker: optional-source pickers, then
-    preflight, then a producer picker for the first missing dataset. A picked
-    producer gets the same step. Everything shown comes from workflow YAML
-    through the catalog. None means the operator cancelled."""
-    current, current_overrides = workflow, dict(overrides)
+    environment: Mapping[str, str],
+) -> DataPlan | PlanStop:
+    """Optional-source pickers, then preflight, then a producer picker for the
+    first missing dataset; a picked producer gets the same step."""
+    current, current_overrides, preset = workflow, dict(overrides), dict(optional_choices)
     visited = [workflow.name]
     produce: tuple[str, ...] = ()
     while True:
-        choices = _choose_optional_sources(current, current_overrides, choose)
+        choices = _choose_sources(current, current_overrides, preset, catalog, choose)
         if choices is None:
-            return None
+            return PlanStop(CANCELED, canceled=True)
         missing = missing_datasets(current, current_overrides, choices)
         if not missing:
             return DataPlan(current, current_overrides, choices, produce, tuple(visited[:-1]))
         dataset = missing[0]
         path = used_data_paths(current, current_overrides, choices)[dataset]
-        chosen = _choose_producer(current, dataset, path, catalog, choose)
-        if chosen is None:
-            return None
+        need = f'"{current.name}" needs "{dataset}" (no rows at {_relative(current, path)})'
+        producers = catalog.producers_of(dataset)
+        if not producers:
+            return PlanStop(f"{need} and no workflow produces it")
+        recommended = catalog.recommended_producer(dataset)
+        index = choose(Choice(
+            title=f"{need}. Run a producer instead? (Esc cancels)",
+            options=tuple(
+                _producer_option(name, recommended, catalog, environment) for name in producers
+            ),
+            cursor=producers.index(recommended) if recommended else 0,
+        ))
+        if index is None:
+            return PlanStop(
+                f"{CANCELED}; {need} — produce it with: {', '.join(producers)} "
+                f"(--produce {dataset})",
+                canceled=True,
+            )
+        chosen = producers[index]
         if chosen in visited:
-            stdout.write(f"[punch] producer cycle: {' → '.join([*visited, chosen])}\n")
-            return None
+            return PlanStop(f"producer cycle: {' → '.join([*visited, chosen])}")
         visited.append(chosen)
-        current, current_overrides, produce = catalog.workflows[chosen], {}, (dataset,)
+        current, current_overrides, preset = catalog.workflows[chosen], {}, {}
+        produce = (dataset,)
 
 
-def switch_hint(plan: DataPlan) -> str:
-    return f"[punch] {plan.produce[0]} ready; run {plan.switched_from[0]} next."
+def switch_hint(plan: DataPlan, catalog: WorkflowCatalog) -> str:
+    origin = catalog.workflows[plan.switched_from[0]]
+    still = missing_datasets(origin, {})
+    hint = f"[punch] {plan.produce[0]} ready; run {origin.name} next"
+    return f"{hint} (still missing: {', '.join(still)})." if still else f"{hint}."
 ```
 
-- [ ] **Step 4: Run to verify pass**
-
-Run: `PY -m unittest tests.test_execution tests.test_catalog tests.test_workflow -v`
-Expected: all OK
+- [ ] **Step 4: Run to verify pass** — `PY -m unittest tests.test_data_plan tests.test_execution tests.test_catalog tests.test_workflow -v` → all OK
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/punch/execution.py tests/test_execution.py
-git commit -m "feat(execution): plan data sources and producer switches before Docker"
+git add src/punch/data_plan.py tests/test_data_plan.py
+git commit -m "feat(data-plan): settle data sources and producer switches before Docker"
 ```
 
 ---
@@ -792,12 +921,12 @@ git commit -m "feat(execution): plan data sources and producer switches before D
 
 **Files:**
 - Modify: `src/punch/menu.py` (add `choose`)
-- Modify: `src/punch/__main__.py` (`_evidence_result`, `cmd_run`)
+- Modify: `src/punch/__main__.py` (`_evidence_result`, `cmd_run`, `run` parser)
 - Test: `tests/test_cli.py`
 
 **Interfaces:**
-- Consumes: Task 4 `Choice`, `DataPlan`, `plan_data`, `switch_hint`; Task 3 `preflight_requirements`, `used_data_paths`, `execute_workflow(optional_choices=...)`; existing `menu._select`, `_MenuCancelled`, `_MenuUnavailable`.
-- Produces: `menu.choose(choice: Choice) -> int | None`; evidence key `"switchedFrom": list[str]` on switched runs only; `CANCELED = "data selection canceled"` failure text.
+- Consumes: Task 4 `Choice`, `DataPlan`, `PlanStop`, `plan_data`, `switch_hint`; Task 3 `resolve_data_args`, `data_sources`, `used_data_paths`, `execute_workflow(optional_choices=...)`; existing `menu._select`, `_MenuCancelled`, `_MenuUnavailable`.
+- Produces: `menu.choose(choice: Choice) -> int | None`; `punch run --no-input`; `--data <dataset>=default`; evidence keys `"switchedFrom"` (switched runs only) and `"dataSources"` (data-reading workflows).
 
 - [ ] **Step 1: Write the failing tests** — in `tests/test_cli.py`:
 
@@ -867,6 +996,10 @@ Helpers + tests:
             text.replace("requires: [carts]", "optional: [carts]"), encoding="utf-8"
         )
 
+    def write_carts_rows(self) -> None:
+        self.carts_path.parent.mkdir(parents=True, exist_ok=True)
+        self.carts_path.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+
     def test_producer_picker_switch_runs_producer_once(self) -> None:
         os.environ["RUN_ID"] = "run-1"
         os.environ["FAKE_DOCKER_STDOUT"] = "[DATA carts] c,p,s"
@@ -898,19 +1031,19 @@ Helpers + tests:
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/data-browser.js", call)
 
-    def test_cancelled_producer_picker_keeps_preflight_failure(self) -> None:
+    def test_cancelled_producer_picker_fails_with_reason(self) -> None:
         with self.picker(None):
             rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
         result = self.evidence()["results"][0]
+        self.assertTrue(result["failure"].startswith("data selection canceled;"))
         self.assertIn("produce it with: data-producer (--produce carts)", result["failure"])
         self.assertNotIn("switchedFrom", result)
 
     def test_optional_source_default_runs_without_data_env(self) -> None:
         self.make_consumer_optional()
-        self.carts_path.parent.mkdir(parents=True)
-        self.carts_path.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+        self.write_carts_rows()
         with self.picker(0) as (calls, _):
             rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 0)
@@ -919,24 +1052,62 @@ Helpers + tests:
         self.assertEqual(kwargs["cursor_index"], 0)
         [call] = self.fake_docker_calls()
         self.assertFalse(any(argument.startswith("DATA_CARTS_CSV=") for argument in call))
+        self.assertEqual(self.evidence()["results"][0]["dataSources"], {"carts": "default"})
 
     def test_optional_source_file_injects_data_env(self) -> None:
         self.make_consumer_optional()
-        self.carts_path.parent.mkdir(parents=True)
-        self.carts_path.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+        self.write_carts_rows()
         with self.picker(1):
             rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn("DATA_CARTS_CSV=/scripts/data/carts.csv", call)
+        self.assertEqual(
+            self.evidence()["results"][0]["dataSources"], {"carts": "data/carts.csv"}
+        )
 
     def test_cancelled_source_picker_fails_before_docker(self) -> None:
         self.make_consumer_optional()
+        self.write_carts_rows()
         with self.picker(None):
             rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
         self.assertEqual(self.evidence()["results"][0]["failure"], "data selection canceled")
+
+    def test_no_input_in_tty_opens_no_picker(self) -> None:
+        self.make_consumer_optional()
+        self.write_carts_rows()
+        with self.picker() as (calls, _):
+            rc = main(["run", str(self.consumer_path), "--no-input"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [])
+        [call] = self.fake_docker_calls()
+        self.assertIn("DATA_CARTS_CSV=/scripts/data/carts.csv", call)
+
+    def test_data_default_skips_picker_in_tty(self) -> None:
+        self.make_consumer_optional()
+        self.write_carts_rows()
+        with self.picker() as (calls, _):
+            rc = main(["run", str(self.consumer_path), "--data", "carts=default"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [])
+        [call] = self.fake_docker_calls()
+        self.assertFalse(any(argument.startswith("DATA_CARTS_CSV=") for argument in call))
+
+    def test_data_default_applies_without_tty(self) -> None:
+        self.make_consumer_optional()
+        self.write_carts_rows()
+        rc = main(["run", str(self.consumer_path), "--data", "carts=default"])
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertFalse(any(argument.startswith("DATA_CARTS_CSV=") for argument in call))
+
+    def test_data_default_on_required_fails_before_docker(self) -> None:
+        rc = main(["run", str(self.consumer_path), "--data", "carts=default"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertIn("is not an optional dataset", self.evidence()["results"][0]["failure"])
 
     def test_switch_drops_consumer_flags_with_note(self) -> None:
         os.environ["RUN_ID"] = "run-1"
@@ -952,8 +1123,9 @@ Helpers + tests:
         self.assertFalse(any(argument.startswith("DATA_CARTS_CSV=") for argument in call))
 
     def test_switched_producer_missing_env_reports_switch(self) -> None:
-        with self.picker(0):
+        with self.picker(0) as (calls, _):
             rc = main(["run", str(self.consumer_path)])
+        self.assertEqual(calls[0][0], ["data-producer  (needs RUN_ID)"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
         result = self.evidence()["results"][0]
@@ -961,13 +1133,18 @@ Helpers + tests:
         self.assertEqual(result["switchedFrom"], ["data-consumer"])
 
     def test_present_required_data_opens_no_picker(self) -> None:
-        self.carts_path.parent.mkdir(parents=True)
-        self.carts_path.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
+        self.write_carts_rows()
         with self.picker() as (calls, _):
             rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 0)
         self.assertEqual(calls, [])
-        self.assertNotIn("switchedFrom", self.evidence()["results"][0])
+        result = self.evidence()["results"][0]
+        self.assertNotIn("switchedFrom", result)
+        self.assertEqual(result["dataSources"], {"carts": "data/carts.csv"})
+
+    def test_workflow_without_data_records_no_data_sources(self) -> None:
+        self.assertEqual(main(["run", str(self.workflow_path)]), 0)
+        self.assertNotIn("dataSources", self.evidence()["results"][0])
 
     def test_non_tty_never_plans(self) -> None:
         with patch("punch.__main__.plan_data") as plan:
@@ -980,13 +1157,10 @@ Helpers + tests:
         plan.assert_not_called()
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [ ] **Step 2: Run to verify failure** — `PY -m unittest tests.test_cli -v` → new tests FAIL/ERROR (`unrecognized arguments: --no-input`, no picker, no `dataSources`, no attribute `plan_data`).
 
-Run: `PY -m unittest tests.test_cli -v`
-Expected: new tests FAIL (no picker / no `switchedFrom`); the two `plan_data` patch tests error (no attribute `plan_data` on `punch.__main__`).
-
-- [ ] **Step 3a: Implement `menu.choose`** — in `src/punch/menu.py` add
-  `Choice` to the `from punch.execution import (...)` list; after
+- [ ] **Step 3a: `menu.choose`** — in `src/punch/menu.py`, add
+  `from punch.data_plan import Choice` to the imports; after
   `_choose_workflow`:
 
 ```python
@@ -998,92 +1172,115 @@ def choose(choice: Choice) -> Optional[int]:
         return None
 ```
 
-- [ ] **Step 3b: Implement `punch run`** — in `src/punch/__main__.py`, module
-  level (stdlib-only module; lets tests patch it):
+- [ ] **Step 3b: Parser** — in `src/punch/__main__.py`, after the `--data`
+  argument:
 
 ```python
-from punch.execution import DataPlan, plan_data, switch_hint
-
-CANCELED = "data selection canceled"
+    run_p.add_argument("--no-input", action="store_true",
+                       help="Never open the data-source or producer pickers.")
 ```
 
-Extend `_evidence_result`:
+and change the `--data` help to:
+`"Read a dataset from PATH (beneath spec.data.directory), or DATASET=default for an optional dataset's built-in data."`
+
+- [ ] **Step 3c: Module-level imports** — `src/punch/__main__.py` (stdlib-only
+  modules; lets tests patch `plan_data`):
+
+```python
+from punch.data_plan import DataPlan, PlanStop, plan_data, switch_hint
+```
+
+- [ ] **Step 3d: `_evidence_result`**
 
 ```python
 def _evidence_result(
-    workflow, result, *, skipped: bool = False, switched_from: tuple[str, ...] = ()
+    workflow,
+    result,
+    *,
+    skipped: bool = False,
+    switched_from: tuple[str, ...] = (),
+    data_sources: dict[str, str] | None = None,
 ) -> dict:
     return {
         # ...existing keys unchanged...
         **({"skipped": True} if skipped else {}),
         **({"switchedFrom": list(switched_from)} if switched_from else {}),
+        **({"dataSources": data_sources} if data_sources else {}),
     }
 ```
 
-Add to the lazy `from punch.execution import (...)` inside `cmd_run`:
-`preflight_requirements`. After the `runnable` loop and **before**
-`protected_paths`:
+- [ ] **Step 3e: `cmd_run`** — add `data_sources` and `resolve_data_args` to
+  its lazy `from punch.execution import (...)` list. After the `runnable`
+  loop and **before** `protected_paths`:
 
 ```python
     produce_args, data_args = list(args.produce), list(args.data)
     plan: DataPlan | None = None
-    if args.selector != "all" and len(runnable) == 1 and sys.stdin.isatty():
+    stopped_rc = 0
+    if (
+        args.selector != "all"
+        and len(runnable) == 1
+        and not args.no_input
+        and sys.stdin.isatty()
+    ):
         from punch.menu import choose
 
         selected = runnable[0]
         try:
             catalog = load_catalog(selected.source_path.parent)
-            overrides = resolve_data_overrides(selected, data_args)
+            overrides, preset = resolve_data_args(selected, data_args)
         except (CatalogError, ValueError):
             pass  # reported by the per-workflow loop below
         else:
-            plan = plan_data(selected, catalog, overrides, choose=choose, stdout=sys.stdout)
-            if plan is None:
-                failure = (
-                    preflight_requirements(selected, overrides, catalog.producers_of)
-                    or CANCELED
-                )
-                print(f"[punch] {failure}", file=sys.stderr, flush=True)
+            outcome = plan_data(
+                selected, catalog, overrides, preset, choose=choose, environment=os.environ
+            )
+            if isinstance(outcome, PlanStop):
+                print(f"[punch] {outcome.reason}", file=sys.stderr, flush=True)
                 results.append(_evidence_result(
-                    selected, ExecutionResult(selected.name, (), None, False, failure)
+                    selected, ExecutionResult(selected.name, (), None, False, outcome.reason)
                 ))
-                runnable = []
-            elif plan.switched_from:
-                if produce_args or data_args:
-                    print(f"[punch] ignoring --produce/--data for {selected.name}", flush=True)
-                produce_args, data_args = list(plan.produce), []
-                workflows = runnable = [plan.workflow]
+                runnable, stopped_rc = [], 1
+            else:
+                plan = outcome
+                if plan.switched_from:
+                    if produce_args or data_args:
+                        print(f"[punch] ignoring --produce/--data for {selected.name}", flush=True)
+                    produce_args, data_args = list(plan.produce), []
+                    workflows = runnable = [plan.workflow]
     switched_from = plan.switched_from if plan is not None else ()
-    optional_choices = plan.optional_choices if plan is not None else None
 ```
 
-Below that point: replace `args.produce` → `produce_args`, `args.data` →
-`data_args` (collision loop and per-workflow loop; the early `all` guard keeps
-`args.*`). In the per-workflow loop pass `optional_choices=optional_choices`
-to `execute_workflow(...)` and as third argument to
-`used_data_paths(workflow, overrides, optional_choices)` in the delete prompt;
-pass `switched_from=switched_from` to every `_evidence_result(workflow, ...)`
-there. After the executed workflow's `results.append(...)`:
+Below that point:
+- Replace `args.produce` → `produce_args`, `args.data` → `data_args` (collision loop and per-workflow loop; the early `all` guard keeps `args.*`).
+- In the per-workflow loop replace
+  `overrides = resolve_data_overrides(workflow, args.data)` with
+  `overrides, preset = resolve_data_args(workflow, data_args)` and right
+  after the `try/except`:
+  `choices = plan.optional_choices if plan is not None else preset`.
+- `execute_workflow(...)`: add `optional_choices=choices,`.
+- `results.append(_evidence_result(workflow, result))` →
+  `results.append(_evidence_result(workflow, result, switched_from=switched_from, data_sources=data_sources(workflow, overrides, choices)))`.
+- The error-path `_evidence_result(...)` in the `except` also gets
+  `switched_from=switched_from`.
+- Delete prompt: `used_data_paths(workflow, overrides)` →
+  `used_data_paths(workflow, overrides, choices)`.
+- After the executed workflow's `results.append(...)`:
 
 ```python
         if result.passed and switched_from:
-            print(switch_hint(plan), flush=True)
+            print(switch_hint(plan, catalog), flush=True)
 ```
 
-Exit code for a cancelled plan: initialize `canceled_rc = 0` just above the
-planning block and set `canceled_rc = 1` in the `plan is None` branch. After
-the per-workflow loop (which is empty in that case), before
-`_write_evidence`, add `overall_rc = overall_rc or canceled_rc`.
+- Before `_write_evidence(...)`: `overall_rc = overall_rc or stopped_rc`.
 
-- [ ] **Step 4: Run to verify pass**
-
-Run: `PY -m unittest tests.test_cli tests.test_execution -v` — Expected: all OK
+- [ ] **Step 4: Run to verify pass** — `PY -m unittest tests.test_cli tests.test_data_plan tests.test_execution -v` → all OK
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/punch/menu.py src/punch/__main__.py tests/test_cli.py
-git commit -m "feat(run): pick data sources and producers before Docker"
+git commit -m "feat(run): data pickers, --no-input, --data default, data source evidence"
 ```
 
 ---
@@ -1095,8 +1292,8 @@ git commit -m "feat(run): pick data sources and producers before Docker"
 - Test: `tests/test_menu.py`
 
 **Interfaces:**
-- Consumes: Task 5 `choose`; Task 4 `plan_data`, `switch_hint`; Task 3 `preflight_requirements`, `data_environment`, `used_data_paths`, `execute_workflow(optional_choices=...)`.
-- Produces: `_choose_produce(workflow: K6Workflow, preselected: Sequence[str] = ()) -> tuple[str, ...]`.
+- Consumes: Task 5 `choose`; Task 4 `plan_data`, `PlanStop`, `switch_hint`; Task 3 `data_environment`, `used_data_paths`, `execute_workflow(optional_choices=...)`.
+- Produces: `_choose_produce(workflow: K6Workflow, forced: Sequence[str] = ()) -> tuple[str, ...]`.
 
 - [ ] **Step 1: Write the failing tests** — in `tests/test_menu.py`:
 
@@ -1129,29 +1326,24 @@ Recording helper on `MenuTests`:
                 yield calls
 ```
 
-Replace `test_consumer_without_data_fails_before_docker`:
+Replace `test_consumer_without_data_fails_before_docker` (Esc on the producer
+picker now means "menu canceled", exit 0):
 
 ```python
-    def test_consumer_without_data_fails_before_docker(self) -> None:
+    def test_esc_on_producer_picker_cancels_menu_before_docker(self) -> None:
         self.write_pair()
-        stderr = io.StringIO()
-        with self.select_menu(0, 0, None), patch("sys.stderr", stderr):
+        output = io.StringIO()
+        with self.select_menu(0, 0, None), patch("sys.stdout", output):
             rc = run_menu(self.root)
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
-        self.assertIn(
-            'consumer requires "orders"; produce it with: producer (--produce orders)',
-            stderr.getvalue(),
-        )
+        self.assertIn("[punch] menu canceled.", output.getvalue())
 ```
-
-`test_workflow_table_marks_optional_inputs` only inspects the table and
-cancels at the second menu — unchanged.
 
 Add:
 
 ```python
-    def test_switch_picks_producer_before_base_url_and_preselects_produce(self) -> None:
+    def test_switch_picks_producer_before_base_url_and_forces_produce(self) -> None:
         self.write_workflow("a-producer", produces={"orders": ["consumer"]})
         self.write_workflow("consumer", requires=["orders"])
         self.write_workflow("producer", forward=["BASE_URL"],
@@ -1160,20 +1352,21 @@ Add:
         with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
             # top-level, workflow (consumer=1), producer picker (producer=1), base URL (0)
             with self.record_menus(0, 1, 1, 0) as calls, patch("sys.stdout", output):
-                with patch("builtins.input", return_value="") as prompt:
+                with patch("builtins.input", return_value="n") as prompt:
                     rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         entries, kwargs = calls[2]
         self.assertEqual(entries, ["a-producer", "producer  (recommended)"])
         self.assertEqual(kwargs["cursor_index"], 1)
+        prompt.assert_not_called()
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/producer.js", call)
         self.assertEqual(
             (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n"
         )
-        self.assertIn('Write "orders" data for consumer? (Y/n)',
-                      prompt.call_args_list[0].args[0])
-        self.assertIn("[punch] orders ready; run consumer next.", output.getvalue())
+        text = output.getvalue()
+        self.assertIn('[punch] writing "orders" (needed by the selected workflow)', text)
+        self.assertIn("[punch] orders ready; run consumer next.", text)
 
     def test_optional_source_picker_default_runs_without_data_env(self) -> None:
         self.write_workflow("producer", produces={"orders": ["consumer"]})
@@ -1210,12 +1403,20 @@ Add:
         self.assertEqual(len(calls), 2)
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/consumer.js", call)
+
+    def test_plan_stop_without_cancel_fails_before_docker(self) -> None:
+        self.write_workflow("consumer", requires=["orders"])
+        self.write_workflow("producer", produces={"orders": ["consumer"]}, requires=["orders"])
+        stderr = io.StringIO()
+        # consumer=0, producer picker → producer (0), producer needs orders → producer again (0)
+        with self.record_menus(0, 0, 0, 0), patch("sys.stderr", stderr):
+            rc = run_menu(self.root)
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.fake_docker_calls(), [])
+        self.assertIn("[punch] producer cycle: consumer → producer → producer", stderr.getvalue())
 ```
 
-- [ ] **Step 2: Run to verify failure**
-
-Run: `PY -m unittest tests.test_menu -v`
-Expected: switch and optional tests FAIL (no picker); updated cancel test errors (`StopIteration`) or FAILs on the stderr message.
+- [ ] **Step 2: Run to verify failure** — `PY -m unittest tests.test_menu -v` → new tests FAIL (no picker / no cancel message / no cycle message).
 
 - [ ] **Step 3: Implement** — in `src/punch/menu.py`:
 
@@ -1223,22 +1424,25 @@ Expected: switch and optional tests FAIL (no picker); updated cancel test errors
 from typing import List, Optional, Sequence
 ```
 
-Add `plan_data`, `preflight_requirements`, `switch_hint` to the
-`from punch.execution import (...)` list.
+```python
+from punch.data_plan import Choice, PlanStop, plan_data, switch_hint
+```
 
 `_choose_produce`:
 
 ```python
-def _choose_produce(workflow: K6Workflow, preselected: Sequence[str] = ()) -> tuple[str, ...]:
+def _choose_produce(workflow: K6Workflow, forced: Sequence[str] = ()) -> tuple[str, ...]:
     if workflow.data is None:
         return ()
     chosen = []
     for product in workflow.data.produces:
-        selected = product.dataset in preselected
+        if product.dataset in forced:
+            print(f'[punch] writing "{product.dataset}" (needed by the selected workflow)')
+            chosen.append(product.dataset)
+            continue
         answer = _prompt(
-            f'Write "{product.dataset}" data for {", ".join(product.targets)}? '
-            f'({"Y/n" if selected else "y/N"})',
-            default="y" if selected else "n",
+            f'Write "{product.dataset}" data for {", ".join(product.targets)}? (y/N)',
+            default="n",
         )
         if answer.lower().startswith("y"):
             chosen.append(product.dataset)
@@ -1249,19 +1453,18 @@ In `_run_workflow_menu`, right after the `try/except` that loads `workflow`
 and `catalog`:
 
 ```python
-    plan = plan_data(workflow, catalog, {}, choose=choose, stdout=sys.stdout)
-    if plan is None:
-        failure = (
-            preflight_requirements(workflow, {}, catalog.producers_of)
-            or "data selection canceled"
-        )
-        print(f"[punch] {failure}", file=sys.stderr)
+    outcome = plan_data(workflow, catalog, {}, {}, choose=choose, environment=os.environ)
+    if isinstance(outcome, PlanStop):
+        if outcome.canceled:
+            raise _MenuCancelled
+        print(f"[punch] {outcome.reason}", file=sys.stderr)
         return 1
+    plan = outcome
     workflow, choices = plan.workflow, plan.optional_choices
 ```
 
 Then:
-- `produce = _choose_produce(workflow, plan.produce)`
+- `produce = _choose_produce(workflow)` → `_choose_produce(workflow, plan.produce)`
 - `data_environment(workflow, {})` → `data_environment(workflow, {}, choices)`
 - `execute_workflow(...)`: add `optional_choices=choices,`
 - `used_data_paths(workflow, {})` → `used_data_paths(workflow, {}, choices)`
@@ -1269,24 +1472,21 @@ Then:
 
 ```python
         if plan.switched_from:
-            print(switch_hint(plan))
+            print(switch_hint(plan, catalog))
 ```
 
-- [ ] **Step 4: Run full suite**
-
-Run: `PY -m unittest discover -s tests -p 'test_*.py'`
-Expected: all OK (131 baseline + new)
+- [ ] **Step 4: Run full suite** — `PY -m unittest discover -s tests -p 'test_*.py'` → all OK
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/punch/menu.py tests/test_menu.py
-git commit -m "feat(menu): pick data sources and producers before Docker prompts"
+git commit -m "feat(menu): data pickers before Docker prompts; forced produce after a switch"
 ```
 
 ---
 
-### Task 7: Docs, literal check, parent YAML + pointer
+### Task 7: Docs, literal check, parent YAML, compatibility
 
 **Files:**
 - Modify: `AGENTS.md:49`, `README.md` (data section ~lines 30-60), `docs/workflows/validation.md` (evidence schema ~line 28; data section ~line 65)
@@ -1294,13 +1494,13 @@ git commit -m "feat(menu): pick data sources and producers before Docker prompts
 
 - [ ] **Step 1: Literal check**
 
-Run: `git diff main -- src/punch | grep -E '^\+.*(carts|orders|users|http-|browser-)'`
+Run: `git diff main -- src/punch | grep -E '^\+.*(carts|orders|users|RUN_ID|http-|browser-)'`
 Expected: empty.
 
 - [ ] **Step 2: `AGENTS.md:49`** — replace with:
 
 ```markdown
-- A dataset is written only when the run opts in with `--produce <dataset>`; interactive prompts are limited to that opt-in, the data-source picker (optional datasets) and producer picker (missing data) shown before Docker on a TTY — still one Compose run — and the consumed-data delete prompt
+- A dataset is written only when the run opts in with `--produce <dataset>`; interactive prompts are limited to that opt-in, the data-source picker (optional datasets) and producer picker (missing data) shown before Docker on a TTY — still one Compose run, skipped with `--no-input` — and the consumed-data delete prompt
 ```
 
 - [ ] **Step 3: `README.md`** — in the YAML example under `produces` add
@@ -1309,33 +1509,38 @@ Expected: empty.
 
 ```markdown
 - In a terminal, `punch run <workflow>` and the `punch` menu settle data
-  before Docker. Each optional dataset offers `default (built-in)` or its
-  data file (cursor on default). Then the normal preflight runs; when a
-  dataset the run reads has no rows, an arrow-key list of every producer of
-  it opens, the one whose product sets `recommended: true` labeled and
-  preselected (first by name if several). Picking one runs it with
-  `--produce <dataset>` — still one Compose run — and walks further when it
-  is missing data too; re-run the original workflow afterwards. Esc cancels;
-  non-interactive runs keep today's automatic behavior.
+  before Docker (`punch.data_plan`). Each optional dataset with more than one
+  available source offers `default (built-in)` or its data file (cursor on
+  default). Then the normal preflight runs; when a dataset the run reads has
+  no rows, an arrow-key list of every producer opens — the one whose product
+  sets `recommended: true` labeled and preselected (first by name if
+  several), producers missing required environment tagged `needs <VAR>`.
+  Picking one runs it with `--produce <dataset>` — still one Compose run —
+  and walks further when it is missing data too; the hint names the workflow
+  to re-run and what it still misses. Esc cancels. Non-interactive
+  equivalents: `--no-input`, `--data <dataset>=default`,
+  `--data <dataset>=<path>`, or run the producer with `--produce`.
 ```
 
-- [ ] **Step 4: `docs/workflows/validation.md`** — in the evidence schema
-  per-result keys add
-  `"switchedFrom": ["<workflow>", ...]   // only when a producer pick replaced the selected workflow`;
-  in the data section add the Step 3 paragraph.
+- [ ] **Step 4: `docs/workflows/validation.md`** — evidence schema per-result keys add:
 
-- [ ] **Step 5: Full suite**
+```text
+"switchedFrom": ["<workflow>", ...]          // only when a producer pick replaced the selected workflow
+"dataSources": {"<dataset>": "default" | "<path>"}  // every dataset the workflow declares it reads
+```
 
-Run: `PY -m unittest discover -s tests -p 'test_*.py'` — Expected: all OK
+and add the Step 3 paragraph to the data section.
+
+- [ ] **Step 5: Full suite** — `PY -m unittest discover -s tests -p 'test_*.py'` → all OK
 
 - [ ] **Step 6: Commit (submodule)**
 
 ```bash
 git add AGENTS.md README.md docs/workflows/validation.md
-git commit -m "docs: describe data source and producer pickers"
+git commit -m "docs: data source and producer pickers, recommended producers"
 ```
 
-- [ ] **Step 7: Parent repo** — branch first if on `main`.
+- [ ] **Step 7: Parent repo YAML + README** — branch first if on `main`.
   - `tests/performance/k6/workflows/http-cart.yaml`: under the `carts`
     product after `targets: [http-orders]` add `        recommended: true`.
   - `tests/performance/k6/workflows/http-purchase.yaml`: under the `orders`
@@ -1348,16 +1553,21 @@ git commit -m "docs: describe data source and producer pickers"
     default or `data/<dataset>.csv`), then — for missing data — lists every
     producer with the `recommended: true` one preselected (`http-cart` for
     `carts`, `http-purchase` for `orders`), runs the picked one with
-    `--produce`, and tells you to re-run the original workflow."
+    `--produce`, and tells you which workflow to re-run. `--no-input` and
+    `--data <dataset>=default` are the non-interactive equivalents."
 
-Verify the real catalog:
+- [ ] **Step 8: Verify real catalog + deprecated glue** (parent repo root)
 
 ```bash
 PYTHONPATH=vendor/punch/src /tmp/punch-venv/bin/python -c \
   "from pathlib import Path; from punch.catalog import load_catalog; c = load_catalog(Path('tests/performance/k6/workflows')); print(c.recommended_producer('carts'), c.recommended_producer('orders'), c.producers_of('orders'))"
+PYTHONPATH=scripts /tmp/punch-venv/bin/python -c "import pg.k6runner; print('k6runner ok')"
+pnpm pg:test
 ```
 
-Expected: `http-cart http-purchase ('browser-purchase', 'http-orders', 'http-purchase')`
+Expected: `http-cart http-purchase ('browser-purchase', 'http-orders', 'http-purchase')`, `k6runner ok`, pg tests OK.
+
+- [ ] **Step 9: Commit (parent)**
 
 ```bash
 git add vendor/punch tests/performance/k6/workflows/http-cart.yaml \
