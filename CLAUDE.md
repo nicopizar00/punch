@@ -53,6 +53,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │       ├── __init__.py
     │       ├── __main__.py               # argparse CLI; streams docker compose
     │       ├── menu.py                   # `punch menu` interactive workflow picker
+    │       ├── data_plan.py              # data-source + producer pickers before Docker (stdlib-only)
     │       └── init_scan.py              # `punch init` bootstrap scanner / readiness mapper
     ├── dist/                             # bundled k6-ready JS (gitignored)
     ├── reports/                          # k6 output (gitignored)
@@ -186,7 +187,10 @@ Python CLI reaches feature parity):
   other orchestration is standard-library based. Definitions live in
   `workflows/k6/*.yaml`; one workflow is one Compose run and `punch run` does
   not build images. A dataset is written only with `--produce <dataset>`;
-  consumers fail before Docker until their datasets exist.
+  consumers fail before Docker until their datasets exist. On a TTY,
+  `src/punch/data_plan.py` first offers optional-dataset sources and, for
+  missing data, a producer to run instead (still one Compose run);
+  `--no-input` skips the pickers.
 - A change is not "done" until `reports/state/punch-run.json` records the
   Test run. See `docs/workflows/validation.md`.
 - Propose changes in small, reviewable steps. Do not implement a full feature
