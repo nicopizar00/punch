@@ -93,7 +93,7 @@ def _terminal_columns() -> int:
         return shutil.get_terminal_size().columns
 
 
-def _workflow_menu_rows(paths: List[Path], workflows_dir: Path) -> tuple[List[str], str]:
+def _workflow_menu_rows(paths: List[Path]) -> tuple[List[str], str]:
     headers = ("Name", "Description", "In", "Out")
     records = []
     for path in paths:
@@ -157,8 +157,8 @@ def _workflow_menu_rows(paths: List[Path], workflows_dir: Path) -> tuple[List[st
     return rows, title
 
 
-def _choose_workflow(paths: List[Path], workflows_dir: Path) -> Path:
-    rows, title = _workflow_menu_rows(paths, workflows_dir)
+def _choose_workflow(paths: List[Path]) -> Path:
+    rows, title = _workflow_menu_rows(paths)
     return paths[_select(rows, title)]
 
 
@@ -308,7 +308,7 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
         return 1
 
     print()
-    selected = _choose_workflow(paths, workflows_dir)
+    selected = _choose_workflow(paths)
     try:
         workflow = load_workflow(selected)
         catalog = load_catalog(workflows_dir)
