@@ -1,6 +1,8 @@
 # Spec — Target data sizing
 
-> **Status:** Draft for human approval (rev 1)
+> **Status:** Approved (rev 2 — planning fixes: `does not forward` and
+> `declares no spec.sizing` reasons, per-target picker, no mode picker
+> without presets, switch hint only after a written switched dataset)
 
 - **Goal** — When the workflow about to run produces a dataset for a target
   workflow, the operator can size the producer run for a target run instead
@@ -80,9 +82,11 @@
       (positive integer), and the target declares `iterationSeconds` →
       `Y = ceil(VUS × seconds(DURATION) / iterationSeconds)`;
     - else the shape is *not estimable*, with the first matching reason:
-      `<T> forwards neither ITERATIONS nor DURATION`, `shape sets neither
-      ITERATIONS nor DURATION`, `DURATION needs VUS`, `<T> declares no
-      sizing.iterationSeconds`, `invalid <NAME> "<value>"`.
+      `<T> forwards neither ITERATIONS nor DURATION`; `<T> does not forward
+      <NAME>[ or <NAME>]` (the load source sets `ITERATIONS`/`DURATION` the
+      target does not forward); `shape sets neither ITERATIONS nor
+      DURATION`; `DURATION needs VUS`; `<T> declares no
+      sizing.iterationSeconds`; `invalid <NAME> "<value>"`.
   - *Producer iterations* `N = ceil(Y × (1 + margin))`, `margin` from the
     target.
   - *Producer VUS* `V = min(N, max(1, ceil(N × iterationSeconds_p /
@@ -110,8 +114,9 @@
        SizingPlan` — raises `SizingError` when the producer is not sizable
        (`<P> is not a sizable producer: needs sizing.iterationSeconds,
        sizing.maxSeconds, and forwarded ITERATIONS and VUS`), the target is
-       not one of its sizing pairs (`<P> does not produce data for <T>`), or
-       the shape is not estimable.
+       not in any of its `produces[].targets` (`<P> does not produce data
+       for <T>`), the target declares no `spec.sizing` (`<T> declares no
+       spec.sizing`), or the shape is not estimable.
      - `producer_environment(environment, plan) -> dict[str, str]` — a copy
        with `ITERATIONS=N`, `VUS=V`, and `DURATION` removed.
      - `summary_lines(plan) -> list[str]`:
@@ -134,13 +139,15 @@
        run <T> next with <preset | NAME=value …>.`
   3. **`punch` menu**, after `plan_data` and the base URL picker, for the
      workflow `W` that will run (picked or switched to — no difference):
-     1. No sizing pair → today's options and produce prompts.
+     1. No sizing pair, or no options preset to size with → today's
+        options and produce prompts.
      2. Otherwise an options-mode picker: `Options as usual` (cursor) /
         `Size for a target workflow`. Esc cancels the menu as on every
         screen.
      3. *Usual* → today's options preset picker and produce prompts.
-     4. *Size* → a pair picker `"<D>" for <T>` (skipped with
-        `[punch] sizing for <T> ("<D>")` when there is one pair), then the
+     4. *Size* → a target picker, one entry per target of the sizing
+        pairs, `"<D>"[, "<D2>"…] for <T>` (skipped with `[punch] sizing for
+        <T> ("<D>"…)` when there is one target), then the
         options preset picker titled `Load options for <T>:` listing every
         preset; a preset whose target shape is not estimable shows
         `  (not estimable: <reason>)` and re-asks when picked. No `Skip`
@@ -149,12 +156,13 @@
         (sized for <T>)`); other datasets of `W` are asked as today.
      6. The Docker environment is `producer_environment` over the base
         environment plus base URL; no producer preset is applied.
-     7. After a passing sized run: `shortfall` warnings, then `next_hint`.
-        Exit code unchanged by a shortfall.
+     7. After a passing sized run: `shortfall` warnings, then `next_hint`
+        (instead of `switch_hint`). Exit code unchanged by a shortfall.
      8. **Supersedes the data-pickers spec:** after a producer switch, the
         menu no longer writes the switched dataset unasked. `W` gets the
         same produce prompts as a direct pick (sized datasets excepted, as
-        above). `switch_hint` after a passing switched run is unchanged.
+        above). `switch_hint` prints after a passing, unsized switched run
+        only when the switched dataset was written.
   4. **`punch run <name> --size-for <T>`**:
      - Single-workflow selector only; with `all` → error before Docker
        (same message pattern as `--produce`/`--data`).
