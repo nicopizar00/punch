@@ -660,5 +660,32 @@ class CliTests(unittest.TestCase):
         )
 
 
+    def test_size_for_producer_without_data_fails_before_docker(self) -> None:
+        path = self.flows / "no-data.yaml"
+        path.write_text(
+            PLAIN_WORKFLOW.replace("name: plain-fixture", "name: no-data")
+            + "  environment:\n    forward: [ITERATIONS, VUS]\n"
+            + "  sizing:\n    iterationSeconds: 1\n    maxSeconds: 270\n",
+            encoding="utf-8",
+        )
+        os.environ["ITERATIONS"] = "5"
+        with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+            rc = main(["run", str(path), "--size-for", "data-consumer"])
+        self.assertSizingStop(rc, "no-data does not produce data for data-consumer")
+
+    def test_size_for_failed_run_counts_no_unpublished_rows(self) -> None:
+        self.make_sizable()
+        self.configure_fake_exit_sequence([99])
+        rows = "|".join(f"[DATA carts] c{index},p,s" for index in range(6))
+        rc, _ = self.run_size_for(ITERATIONS="5", FAKE_DOCKER_STDOUT=rows)
+        self.assertEqual(rc, 99)
+        result = self.evidence()["results"][0]
+        self.assertFalse(result["datasets"][0]["published"])
+        self.assertEqual(
+            (result["sizing"]["producedRows"], result["sizing"]["short"]), ({"carts": 0}, True)
+        )
+        self.assertFalse(self.carts_path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

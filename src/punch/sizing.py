@@ -146,10 +146,9 @@ def size_producer(
             f"{producer.name} is not a sizable producer: needs sizing.iterationSeconds, "
             "sizing.maxSeconds, and forwarded ITERATIONS and VUS"
         )
-    assert producer.sizing is not None and producer.data is not None
-    datasets = tuple(
-        product.dataset for product in producer.data.produces if target_name in product.targets
-    )
+    assert producer.sizing is not None
+    products = producer.data.produces if producer.data is not None else ()
+    datasets = tuple(product.dataset for product in products if target_name in product.targets)
     if not datasets:
         raise SizingError(f"{producer.name} does not produce data for {target_name}")
     target = catalog.workflows[target_name]

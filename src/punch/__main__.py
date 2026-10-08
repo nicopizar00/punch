@@ -406,7 +406,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             producers_of=catalog.producers_of,
             log_path=LOGS_DIR / f"k6-{workflow.name}.log",
         )
-        produced = {dataset.dataset: dataset.record_count for dataset in result.datasets}
+        produced = {
+            dataset.dataset: dataset.record_count for dataset in result.datasets if dataset.published
+        }
         results.append(_evidence_result(
             workflow,
             result,
