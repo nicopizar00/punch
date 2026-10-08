@@ -499,7 +499,7 @@ class CliTests(unittest.TestCase):
         with self.picker(0) as (_, output):
             rc = main(["run", str(self.consumer_path), "--data", "carts=data/empty.csv"])
         self.assertEqual(rc, 0)
-        self.assertIn("[punch] ignoring --produce/--data for data-consumer", output.getvalue())
+        self.assertIn("[punch] ignoring --data for data-consumer", output.getvalue())
         [call] = self.fake_docker_calls()
         self.assertFalse(any(argument.startswith("DATA_CARTS_CSV=") for argument in call))
 
@@ -536,6 +536,128 @@ class CliTests(unittest.TestCase):
         with patch("sys.stdin", TtyInput("")), patch("punch.__main__.plan_data") as plan:
             main(["run", "all"])
         plan.assert_not_called()
+
+
+    SHAPE = "VUS, DURATION, ITERATIONS"
+
+    def make_sizable(
+        self, target_sizing: str = "  sizing:\n    iterationSeconds: 2\n    margin: 0.15\n"
+    ) -> None:
+        producer = self.producer_path.read_text(encoding="utf-8")
+        self.producer_path.write_text(
+            producer.replace("forward: [BASE_URL, RUN_ID]", f"forward: [BASE_URL, RUN_ID, {self.SHAPE}]")
+            + "  sizing:\n    iterationSeconds: 1\n    maxSeconds: 270\n",
+            encoding="utf-8",
+        )
+        consumer = self.consumer_path.read_text(encoding="utf-8")
+        self.consumer_path.write_text(
+            consumer.replace("forward: [BASE_URL]", f"forward: [BASE_URL, {self.SHAPE}]")
+            + target_sizing,
+            encoding="utf-8",
+        )
+
+    def run_size_for(self, target: str = "data-consumer", **environment: str):
+        os.environ.update({"RUN_ID": "run-1", **environment})
+        output = io.StringIO()
+        with patch("sys.stdout", output), patch("sys.stderr", output):
+            rc = main(["run", str(self.producer_path), "--size-for", target])
+        return rc, output.getvalue()
+
+    def assertSizingStop(self, rc: int, reason: str) -> None:
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        result = self.evidence()["results"][0]
+        self.assertIn(reason, result["failure"])
+        self.assertNotIn("sizing", result)
+
+    def test_size_for_overrides_shape_and_writes_dataset(self) -> None:
+        self.make_sizable()
+        rows = "|".join(f"[DATA carts] c{index},p,s" for index in range(5))
+        rc, text = self.run_size_for(
+            ITERATIONS="4", VUS="2", DURATION="1m", FAKE_DOCKER_STDOUT=rows
+        )
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("ITERATIONS=5", call)
+        self.assertIn("VUS=1", call)
+        self.assertFalse(any(argument.startswith("DURATION=") for argument in call))
+        self.assertEqual(len(self.carts_path.read_text(encoding="utf-8").splitlines()), 6)
+        self.assertEqual(self.evidence()["results"][0]["sizing"], {
+            "target": "data-consumer",
+            "datasets": ["carts"],
+            "shape": {"ITERATIONS": "4", "VUS": "2", "DURATION": "1m"},
+            "preset": None,
+            "rowsNeeded": 4,
+            "margin": 0.15,
+            "producerIterations": 5,
+            "producerVus": 1,
+            "producedRows": {"carts": 5},
+            "short": False,
+        })
+        self.assertIn(
+            "[punch] sizing data-producer for data-consumer (ITERATIONS=4 VUS=2 DURATION=1m)", text
+        )
+        self.assertIn(
+            "[punch] carts ready (5 rows); run data-consumer next with "
+            "ITERATIONS=4 VUS=2 DURATION=1m.",
+            text,
+        )
+
+    def test_size_for_duration_shape_and_shortfall(self) -> None:
+        self.make_sizable()
+        rc, text = self.run_size_for(VUS="5", DURATION="5m", FAKE_DOCKER_STDOUT="[DATA carts] c,p,s")
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn("ITERATIONS=863", call)
+        self.assertIn("VUS=4", call)
+        self.assertIn("  producer VUS  : 4  (~216s of 270s budget)", text)
+        self.assertIn('[punch] warning: "carts" has 1 row; data-consumer needs 750', text)
+        sizing = self.evidence()["results"][0]["sizing"]
+        self.assertEqual((sizing["producedRows"], sizing["short"]), ({"carts": 1}, True))
+
+    def test_size_for_explicit_produce_is_not_duplicated(self) -> None:
+        self.make_sizable()
+        os.environ.update({"RUN_ID": "run-1", "ITERATIONS": "1", "FAKE_DOCKER_STDOUT": "[DATA carts] c,p,s"})
+        with patch("sys.stdout", io.StringIO()):
+            rc = main(["run", str(self.producer_path), "--produce", "carts", "--size-for", "data-consumer"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            [dataset["dataset"] for dataset in self.evidence()["results"][0]["datasets"]], ["carts"]
+        )
+
+    def test_size_for_non_sizable_producer_fails_before_docker(self) -> None:
+        rc, _ = self.run_size_for(ITERATIONS="5")
+        self.assertSizingStop(rc, "data-producer is not a sizable producer")
+
+    def test_size_for_unknown_target_fails_before_docker(self) -> None:
+        self.make_sizable()
+        rc, _ = self.run_size_for("nope", ITERATIONS="5")
+        self.assertSizingStop(rc, "data-producer does not produce data for nope")
+
+    def test_size_for_unsized_target_fails_before_docker(self) -> None:
+        self.make_sizable(target_sizing="")
+        rc, _ = self.run_size_for(ITERATIONS="5")
+        self.assertSizingStop(rc, "data-consumer declares no spec.sizing")
+
+    def test_size_for_non_estimable_shape_fails_before_docker(self) -> None:
+        self.make_sizable()
+        rc, _ = self.run_size_for()
+        self.assertSizingStop(rc, "shape sets neither ITERATIONS nor DURATION")
+
+    def test_size_for_is_rejected_with_all(self) -> None:
+        self.assertEqual(main(["run", "all", "--size-for", "data-consumer"]), 1)
+        self.assertEqual(self.compose_run_count(), 0)
+
+    def test_switch_drops_size_for_with_note(self) -> None:
+        os.environ.update({"RUN_ID": "run-1", "FAKE_DOCKER_STDOUT": "[DATA carts] c,p,s"})
+        with self.picker(0) as (_, output):
+            rc = main(["run", str(self.consumer_path), "--size-for", "data-status"])
+        self.assertEqual(rc, 0)
+        self.assertIn("[punch] ignoring --size-for for data-consumer", output.getvalue())
+        self.assertNotIn("sizing", self.evidence()["results"][0])
+        self.assertEqual(
+            self.carts_path.read_text(encoding="utf-8"), "cartId,productId,sid\nc,p,s\n"
+        )
 
 
 if __name__ == "__main__":

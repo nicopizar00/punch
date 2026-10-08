@@ -193,6 +193,7 @@ def _evidence_result(
     skipped: bool = False,
     switched_from: tuple[str, ...] = (),
     data_sources: dict[str, str] | None = None,
+    sizing: dict | None = None,
 ) -> dict:
     return {
         "test": workflow.name,
@@ -213,6 +214,7 @@ def _evidence_result(
         **({"skipped": True} if skipped else {}),
         **({"switchedFrom": list(switched_from)} if switched_from else {}),
         **({"dataSources": data_sources} if data_sources else {}),
+        **({"sizing": sizing} if sizing else {}),
     }
 
 
@@ -221,6 +223,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from punch.execution import (
         ExecutionResult,
         confirm_delete_consumed,
+        data_row_count,
         execute_workflow,
         paths_collide,
         used_data_paths,
@@ -229,11 +232,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         validate_produce,
     )
     from punch.workflow import WorkflowError
+    from punch.sizing import (
+        SizingError,
+        input_warnings,
+        next_hint,
+        producer_environment,
+        shortfall,
+        size_producer,
+        sizing_evidence,
+        summary_lines,
+    )
 
     started = datetime.now(timezone.utc).isoformat()
     t0 = time.monotonic()
-    if args.selector == "all" and (args.produce or args.data):
-        print("[punch] --produce and --data apply to one selected workflow, not 'all'",
+    if args.selector == "all" and (args.produce or args.data or args.size_for):
+        print("[punch] --produce, --data, and --size-for apply to one selected workflow, not 'all'",
               file=sys.stderr, flush=True)
         return 1
     try:
@@ -258,6 +271,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         runnable.append(workflow)
 
     produce_args, data_args = list(args.produce), list(args.data)
+    size_for: str | None = args.size_for
     plan: DataPlan | None = None
     stopped_rc = 0
     if (
@@ -296,11 +310,36 @@ def cmd_run(args: argparse.Namespace) -> int:
             else:
                 plan = outcome
                 if plan.switched_from:
-                    if produce_args or data_args:
-                        print(f"[punch] ignoring --produce/--data for {selected.name}", flush=True)
-                    produce_args, data_args = list(plan.produce), []
+                    ignored = [
+                        flag for flag, given in (
+                            ("--produce", produce_args),
+                            ("--data", data_args),
+                            ("--size-for", size_for),
+                        ) if given
+                    ]
+                    if ignored:
+                        print(f"[punch] ignoring {'/'.join(ignored)} for {selected.name}",
+                              flush=True)
+                    produce_args, data_args, size_for = list(plan.produce), [], None
                     workflows = runnable = [plan.workflow]
     switched_from = plan.switched_from if plan is not None else ()
+    sizing_plan = None
+    if size_for is not None and runnable:
+        sized_workflow = runnable[0]
+        try:
+            sizing_plan = size_producer(
+                sized_workflow, size_for, load_catalog(sized_workflow.source_path.parent),
+                os.environ,
+            )
+        except (CatalogError, SizingError) as error:
+            print(f"[punch] {error}", file=sys.stderr, flush=True)
+            results.append(_evidence_result(
+                sized_workflow,
+                ExecutionResult(sized_workflow.name, (), None, False, str(error)),
+            ))
+            runnable, stopped_rc = [], 1
+        else:
+            produce_args = list(dict.fromkeys([*produce_args, *sizing_plan.datasets]))
 
     protected_paths = [STATE_DIR / "punch-run.json"]
     protected_paths.extend(LOGS_DIR / f"k6-{workflow.name}.log" for workflow in runnable)
@@ -346,24 +385,41 @@ def cmd_run(args: argparse.Namespace) -> int:
                 break
             continue
         choices = plan.optional_choices if plan is not None else preset
+        environment = os.environ
+        if sizing_plan is not None:
+            environment = producer_environment(os.environ, sizing_plan)
+            for line in summary_lines(sizing_plan):
+                print(line, flush=True)
+            row_counts = {
+                dataset: data_row_count(path)
+                for dataset, path in used_data_paths(workflow, overrides, choices).items()
+            }
+            for line in input_warnings(sizing_plan, row_counts):
+                print(line, flush=True)
 
         result = execute_workflow(
             workflow,
-            environment=os.environ,
+            environment=environment,
             produce=produce,
             data_overrides=overrides,
             optional_choices=choices,
             producers_of=catalog.producers_of,
             log_path=LOGS_DIR / f"k6-{workflow.name}.log",
         )
+        produced = {dataset.dataset: dataset.record_count for dataset in result.datasets}
         results.append(_evidence_result(
             workflow,
             result,
             switched_from=switched_from,
             data_sources=data_sources(workflow, overrides, choices),
+            sizing=sizing_evidence(sizing_plan, produced) if sizing_plan is not None else None,
         ))
         if result.passed and switched_from:
             print(switch_hint(plan, catalog), flush=True)
+        if result.passed and sizing_plan is not None:
+            for line in shortfall(sizing_plan, produced):
+                print(line, flush=True)
+            print(next_hint(sizing_plan, produced), flush=True)
         if result.child_exit_code is not None:
             confirm_delete_consumed(
                 used_data_paths(workflow, overrides, choices), stdin=sys.stdin, stdout=sys.stdout
@@ -429,6 +485,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Read a dataset from PATH (beneath spec.data.directory), or DATASET=default for an optional dataset's built-in data.")
     run_p.add_argument("--no-input", action="store_true",
                        help="Never open the data-source or producer pickers.")
+    run_p.add_argument("--size-for", metavar="TARGET", default=None,
+                       help="Size this producer run for TARGET: rows from TARGET's "
+                            "ITERATIONS/VUS/DURATION in the environment plus its margin; "
+                            "implies --produce for the datasets it feeds TARGET.")
 
     menu_p = sub.add_parser(
         "menu", help="Interactively pick and run a k6 workflow from a directory."
