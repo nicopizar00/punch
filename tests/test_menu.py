@@ -95,6 +95,7 @@ class MenuTests(unittest.TestCase):
         recommended: list[str] | None = None,
         service: str = "k6",
         description: str | None = None,
+        sizing: dict | None = None,
     ) -> Path:
         environment = ""
         if forward:
@@ -115,6 +116,12 @@ class MenuTests(unittest.TestCase):
                 data += f"    requires: [{', '.join(requires)}]\n"
             if optional:
                 data += f"    optional: [{', '.join(optional)}]\n"
+        if sizing is not None:
+            data += (
+                "  sizing:\n" + "".join(f"    {key}: {value}\n" for key, value in sizing.items())
+                if sizing
+                else "  sizing: {}\n"
+            )
         path = self.root / f"{name}.yaml"
         path.write_text(
             WORKFLOW_TEMPLATE.format(
@@ -249,7 +256,7 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(self.fake_docker_calls(), [])
         self.assertIn("[punch] menu canceled.", output.getvalue())
 
-    def test_switch_picks_producer_before_base_url_and_forces_produce(self) -> None:
+    def test_switch_asks_to_write_like_a_direct_pick(self) -> None:
         self.write_workflow("a-producer", produces={"orders": ["consumer"]})
         self.write_workflow("consumer", requires=["orders"])
         self.write_workflow("producer", forward=["BASE_URL"],
@@ -258,7 +265,7 @@ class MenuTests(unittest.TestCase):
         with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
             # top-level, workflow (consumer=1), producer picker (producer=1), base URL (0)
             with self.record_menus(0, 1, 1, 0) as calls, patch("sys.stdout", output):
-                with patch("builtins.input", return_value="n") as prompt:
+                with patch("builtins.input", return_value="y") as prompt:
                     rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 4)
@@ -266,15 +273,28 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(entries, ["a-producer", "producer  (recommended)"])
         self.assertEqual(kwargs["cursor_index"], 1)
         self.assertEqual(calls[3][1]["title"], "Pick a target:")
-        prompt.assert_not_called()
+        self.assertIn('Write "orders" data for consumer?', prompt.call_args_list[0].args[0])
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/producer.js", call)
         self.assertEqual(
             (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n"
         )
         text = output.getvalue()
-        self.assertIn('[punch] writing "orders" (needed by the selected workflow)', text)
+        self.assertNotIn("[punch] writing", text)
         self.assertIn("[punch] orders ready; run consumer next.", text)
+
+    def test_declined_switch_write_prints_no_ready_hint(self) -> None:
+        self.write_pair()
+        output = io.StringIO()
+        with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
+            # top-level, workflow (consumer=0), producer picker (0)
+            with self.record_menus(0, 0, 0), patch("sys.stdout", output):
+                with patch("builtins.input", return_value="n"):
+                    rc = run_menu(self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.fake_docker_calls()), 1)
+        self.assertFalse((self.root / "data" / "orders.csv").exists())
+        self.assertNotIn("ready", output.getvalue())
 
     def test_optional_source_picker_default_runs_without_data_env(self) -> None:
         self.write_workflow("producer", produces={"orders": ["consumer"]})
@@ -705,6 +725,144 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn("VUS=5", call)
+
+
+    SIZED_PRODUCER = {"iterationSeconds": 1, "maxSeconds": 270}
+
+    def write_sized_pair(self, *, presets: bool = True) -> None:
+        self.write_workflow(
+            "producer", forward=["BASE_URL", "VUS", "DURATION", "ITERATIONS"],
+            produces={"orders": ["consumer"]}, sizing=self.SIZED_PRODUCER,
+        )
+        self.write_workflow(
+            "consumer", forward=["BASE_URL", "VUS", "ITERATIONS"],
+            requires=["orders"], sizing={"margin": 0.15},
+        )
+        if presets:
+            self.write_options("5-iterations", {"ITERATIONS": 5})
+            self.write_options("5-vu-5m", {"VUS": 5, "DURATION": "5m"})
+
+    @staticmethod
+    def orders_stdout(count: int) -> str:
+        return "|".join(f"[DATA orders] {index}" for index in range(1, count + 1))
+
+    def run_sized(self, *indices: int | None, rows: int = 6):
+        output = io.StringIO()
+        environment = {"FAKE_DOCKER_STDOUT": self.orders_stdout(rows), "DURATION": "5m"}
+        with patch.dict(os.environ, environment):
+            with self.record_menus(*indices) as calls, patch("sys.stdout", output):
+                with patch("builtins.input", return_value="n") as prompt:
+                    rc = run_menu(self.root, options_dir=self.root_options_dir())
+        return rc, calls, output.getvalue(), prompt
+
+    def test_sized_run_overrides_shape_and_writes_without_asking(self) -> None:
+        self.write_sized_pair()
+        # top-level, workflow (producer=1), base URL (0), mode (size=1), preset (5-iterations=0)
+        rc, calls, text, prompt = self.run_sized(0, 1, 0, 1, 0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(calls[3][0], ["Options as usual", "Size for a target workflow"])
+        self.assertEqual(calls[3][1]["title"], "Load options:")
+        self.assertEqual(
+            calls[4][0],
+            ["5-iterations", "5-vu-5m  (not estimable: consumer does not forward DURATION)"],
+        )
+        self.assertEqual(calls[4][1]["title"], "Load options for consumer:")
+        self.assertEqual(calls[4][1]["cursor_index"], 0)
+        prompt.assert_not_called()
+        [call] = self.fake_docker_calls()
+        self.assertIn("ITERATIONS=6", call)
+        self.assertIn("VUS=1", call)
+        self.assertFalse(any(part.startswith("DURATION=") for part in call))
+        self.assertEqual(
+            (self.root / "data" / "orders.csv").read_text(encoding="utf-8"),
+            "id\n1\n2\n3\n4\n5\n6\n",
+        )
+        for line in (
+            '[punch] sizing for consumer ("orders")',
+            "[punch] sizing producer for consumer (5-iterations)",
+            "  rows needed   : 5  (ITERATIONS=5)",
+            "  margin 15%   : 6 producer iterations",
+            "  producer VUS  : 1  (~6s of 270s budget)",
+            '[punch] writing "orders" (sized for consumer)',
+            "[punch] orders ready (6 rows); run consumer next with 5-iterations.",
+        ):
+            self.assertIn(line, text)
+        self.assertNotIn("warning", text)
+
+    def test_not_estimable_preset_re_asks(self) -> None:
+        self.write_sized_pair()
+        rc, calls, _, _ = self.run_sized(0, 1, 0, 1, 1, 0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(calls[5][1]["title"], "Load options for consumer:")
+        self.assertEqual(calls[5][1]["cursor_index"], 1)
+        [call] = self.fake_docker_calls()
+        self.assertIn("ITERATIONS=6", call)
+
+    def test_esc_on_target_preset_cancels_before_docker(self) -> None:
+        self.write_sized_pair()
+        rc, _, text, _ = self.run_sized(0, 1, 0, 1, None)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.fake_docker_calls(), [])
+        self.assertIn("[punch] menu canceled.", text)
+
+    def test_shortfall_warns_and_keeps_exit_code(self) -> None:
+        self.write_sized_pair()
+        rc, _, text, _ = self.run_sized(0, 1, 0, 1, 0, rows=3)
+        self.assertEqual(rc, 0)
+        self.assertIn('[punch] warning: "orders" has 3 rows; consumer needs 5', text)
+        self.assertIn("[punch] orders ready (3 rows); run consumer next with 5-iterations.", text)
+
+    def test_options_as_usual_keeps_preset_and_produce_prompt(self) -> None:
+        self.write_sized_pair()
+        # mode (usual=0), options preset picker ("5-iterations" = 1 after "Skip")
+        rc, calls, text, prompt = self.run_sized(0, 1, 0, 0, 1)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[4][0], ["Skip (use env/default)", "5-iterations", "5-vu-5m"])
+        self.assertIn('Write "orders" data for consumer?', prompt.call_args_list[0].args[0])
+        [call] = self.fake_docker_calls()
+        self.assertIn("ITERATIONS=5", call)
+        self.assertNotIn("[punch] sizing", text)
+
+    def test_no_presets_means_no_mode_picker(self) -> None:
+        self.write_sized_pair(presets=False)
+        rc, calls, _, prompt = self.run_sized(0, 1, 0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 3)
+        prompt.assert_called_once()
+
+    def test_switched_producer_gets_the_same_mode_picker(self) -> None:
+        self.write_sized_pair()
+        # top-level, workflow (consumer=0), producer picker (0), base URL (0), mode (1), preset (0)
+        rc, calls, text, prompt = self.run_sized(0, 0, 0, 0, 1, 0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[4][0], ["Options as usual", "Size for a target workflow"])
+        prompt.assert_not_called()
+        [call] = self.fake_docker_calls()
+        self.assertIn("/scripts/producer.js", call)
+        self.assertIn("ITERATIONS=6", call)
+        self.assertIn("[punch] orders ready (6 rows); run consumer next with 5-iterations.", text)
+        self.assertNotIn("[punch] orders ready; run consumer next.", text)
+
+    def test_target_picker_lists_each_sized_target(self) -> None:
+        self.write_sized_pair()
+        self.write_workflow(
+            "producer", forward=["BASE_URL", "VUS", "DURATION", "ITERATIONS"],
+            produces={"orders": ["consumer", "other"]}, sizing=self.SIZED_PRODUCER,
+        )
+        self.write_workflow(
+            "other", forward=["BASE_URL", "VUS", "ITERATIONS"],
+            requires=["orders"], sizing={},
+        )
+        # workflows sorted: consumer, other, producer=2; target picker other=1
+        rc, calls, text, _ = self.run_sized(0, 2, 0, 1, 1, 0, rows=5)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[4][0], ['"orders" for consumer', '"orders" for other'])
+        self.assertEqual(calls[4][1]["title"], "Size for which target?")
+        [call] = self.fake_docker_calls()
+        self.assertIn("ITERATIONS=5", call)  # other: margin 0
+        self.assertIn("[punch] orders ready (5 rows); run other next with 5-iterations.", text)
 
 
 class _SelectedMenu:

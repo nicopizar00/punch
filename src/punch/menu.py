@@ -13,7 +13,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional
 
 from rich.cells import cell_len, set_cell_size
 from simple_term_menu import TerminalMenu
@@ -26,8 +26,20 @@ from punch.execution import (
     confirm_delete_consumed,
     confirm_docker_run,
     data_environment,
+    data_row_count,
     execute_workflow,
     used_data_paths,
+)
+from punch.sizing import (
+    SizingError,
+    SizingPlan,
+    input_warnings,
+    next_hint,
+    producer_environment,
+    shortfall,
+    size_producer,
+    sizing_pairs,
+    summary_lines,
 )
 from punch.workflow import K6Workflow, WorkflowError, load_workflow
 
@@ -245,13 +257,76 @@ def _choose_options(workflow: K6Workflow, options_dir: Path) -> dict:
     return _load_options_preset(paths[choice - 1])
 
 
-def _choose_produce(workflow: K6Workflow, forced: Sequence[str] = ()) -> tuple[str, ...]:
+def _choose_target_preset(
+    workflow: K6Workflow, target: str, catalog, paths: List[Path]
+) -> SizingPlan:
+    entries: List[str] = []
+    plans: List[Optional[SizingPlan]] = []
+    for path in paths:
+        try:
+            plan = size_producer(
+                workflow, target, catalog, _load_options_preset(path), preset=path.stem
+            )
+        except SizingError as error:
+            entries.append(f"{path.stem}  (not estimable: {error})")
+            plans.append(None)
+        else:
+            entries.append(path.stem)
+            plans.append(plan)
+    cursor = next(
+        (index for index, path in enumerate(paths) if path.stem == _DEFAULT_OPTIONS_PRESET), 0
+    )
+    while True:
+        cursor = _select(entries, f"Load options for {target}:", cursor_index=cursor)
+        plan = plans[cursor]
+        if plan is not None:
+            return plan
+
+
+def _choose_sizing(
+    workflow: K6Workflow, catalog, options_dir: Path, optional_choices
+) -> Optional[SizingPlan]:
+    """Options mode for a producer with sized targets; None keeps today's options flow."""
+    pairs = sizing_pairs(workflow, catalog)
+    paths = discover_options(options_dir)
+    if not pairs or not paths:
+        return None
+    if _select(["Options as usual", "Size for a target workflow"], "Load options:") == 0:
+        return None
+    datasets_by_target: dict = {}
+    for dataset, target in pairs:
+        datasets_by_target.setdefault(target, []).append(dataset)
+    quoted = {
+        target: ", ".join(f'"{dataset}"' for dataset in datasets)
+        for target, datasets in datasets_by_target.items()
+    }
+    targets = list(datasets_by_target)
+    if len(targets) == 1:
+        target = targets[0]
+        print(f"[punch] sizing for {target} ({quoted[target]})")
+    else:
+        target = targets[
+            _select([f"{quoted[name]} for {name}" for name in targets], "Size for which target?")
+        ]
+    plan = _choose_target_preset(workflow, target, catalog, paths)
+    for line in summary_lines(plan):
+        print(line)
+    row_counts = {
+        dataset: data_row_count(path)
+        for dataset, path in used_data_paths(workflow, {}, optional_choices).items()
+    }
+    for line in input_warnings(plan, row_counts):
+        print(line)
+    return plan
+
+
+def _choose_produce(workflow: K6Workflow, sized: Optional[SizingPlan] = None) -> tuple[str, ...]:
     if workflow.data is None:
         return ()
     chosen = []
     for product in workflow.data.produces:
-        if product.dataset in forced:
-            print(f'[punch] writing "{product.dataset}" (needed by the selected workflow)')
+        if sized is not None and product.dataset in sized.datasets:
+            print(f'[punch] writing "{product.dataset}" (sized for {sized.target.name})')
             chosen.append(product.dataset)
             continue
         answer = _prompt(
@@ -344,13 +419,16 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
     workflow, choices = plan.workflow, plan.optional_choices
 
     base_url = _choose_base_url(workflow)
-    options = _choose_options(workflow, resolved_options_dir)
-    produce = _choose_produce(workflow, plan.produce)
+    sized = _choose_sizing(workflow, catalog, resolved_options_dir, choices)
+    options = _choose_options(workflow, resolved_options_dir) if sized is None else {}
+    produce = _choose_produce(workflow, sized)
 
     environment = dict(os.environ)
     if base_url is not None:
         environment["BASE_URL"] = base_url
     environment.update(options)
+    if sized is not None:
+        environment = producer_environment(environment, sized)
 
     command = build_compose_run_command(
         workflow, environment, data_env=data_environment(workflow, {}, choices)
@@ -375,7 +453,12 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
         )
     if result.passed:
         _print_metrics(workflow)
-        if plan.switched_from:
+        if sized is not None:
+            produced = {dataset.dataset: dataset.record_count for dataset in result.datasets}
+            for line in shortfall(sized, produced):
+                print(line)
+            print(next_hint(sized, produced))
+        elif plan.switched_from and plan.produce[0] in produce:
             print(switch_hint(plan, catalog))
     print()
     return rc
