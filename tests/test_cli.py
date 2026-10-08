@@ -351,14 +351,32 @@ class CliTests(unittest.TestCase):
         self.assertIn("/scripts/data-browser.js", call)
 
     def test_cancelled_producer_picker_fails_with_reason(self) -> None:
-        with self.picker(None):
+        stderr = io.StringIO()
+        with self.picker(None), patch("sys.stderr", stderr):
             rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
-        result = self.evidence()["results"][0]
+        evidence = self.evidence()
+        self.assertEqual(evidence["tests"], ["data-consumer"])
+        result = evidence["results"][0]
         self.assertTrue(result["failure"].startswith("data selection canceled;"))
         self.assertIn("produce it with: data-producer (--produce carts)", result["failure"])
         self.assertNotIn("switchedFrom", result)
+        self.assertIn(f"[punch] {result['failure']}", stderr.getvalue())
+
+    def test_switched_dataset_aliasing_the_state_artifact_is_rejected(self) -> None:
+        # The collision check must run against the producer picked by the switch.
+        os.environ["RUN_ID"] = "run-1"
+        state_path = self.state_dir / "punch-run.json"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text("previous state\n", encoding="utf-8")
+        self.carts_path.parent.mkdir(parents=True)
+        self.carts_path.symlink_to(state_path)
+        with self.picker(0):
+            rc = main(["run", str(self.consumer_path)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.compose_run_count(), 0)
+        self.assertEqual(state_path.read_text(encoding="utf-8"), "previous state\n")
 
     def test_optional_source_default_runs_without_data_env(self) -> None:
         self.make_consumer_optional()

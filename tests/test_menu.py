@@ -241,9 +241,11 @@ class MenuTests(unittest.TestCase):
     def test_esc_on_producer_picker_cancels_menu_before_docker(self) -> None:
         self.write_pair()
         output = io.StringIO()
-        with self.select_menu(0, 0, None), patch("sys.stdout", output):
+        with self.record_menus(0, 0, None) as calls, patch("sys.stdout", output):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
+        # top-level, workflow, producer picker — no target/options menus after Esc
+        self.assertEqual(len(calls), 3)
         self.assertEqual(self.fake_docker_calls(), [])
         self.assertIn("[punch] menu canceled.", output.getvalue())
 
@@ -259,9 +261,11 @@ class MenuTests(unittest.TestCase):
                 with patch("builtins.input", return_value="n") as prompt:
                     rc = run_menu(self.root)
         self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 4)
         entries, kwargs = calls[2]
         self.assertEqual(entries, ["a-producer", "producer  (recommended)"])
         self.assertEqual(kwargs["cursor_index"], 1)
+        self.assertEqual(calls[3][1]["title"], "Pick a target:")
         prompt.assert_not_called()
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/producer.js", call)
@@ -327,9 +331,10 @@ class MenuTests(unittest.TestCase):
         self.write_workflow("producer", produces={"orders": ["consumer"]}, requires=["orders"])
         stderr = io.StringIO()
         # consumer=0, producer picker → producer (0), producer needs orders → producer again (0)
-        with self.record_menus(0, 0, 0, 0), patch("sys.stderr", stderr):
+        with self.record_menus(0, 0, 0, 0) as calls, patch("sys.stderr", stderr):
             rc = run_menu(self.root)
         self.assertEqual(rc, 1)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(self.fake_docker_calls(), [])
         self.assertIn("[punch] producer cycle: consumer → producer → producer", stderr.getvalue())
 

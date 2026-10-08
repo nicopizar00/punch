@@ -178,14 +178,34 @@ class PlanDataTests(unittest.TestCase):
         )
 
     def test_producer_step_ignores_selected_workflow_overrides(self) -> None:
+        # data-status reads carts too, overridden to a file with rows. If that
+        # override leaked into data-consumer's step, carts would look present
+        # there and the second picker would never open.
         self.add_second_hop()
-        empty = self.root / "data" / "empty-orders.csv"
-        empty.parent.mkdir(parents=True)
-        empty.write_text("orderId\n", encoding="utf-8")
+        self.edit("data-status.yaml", "requires: [orders]", "requires: [orders, carts]")
+        alternate = self.root / "data" / "alt-carts.csv"
+        alternate.parent.mkdir(parents=True)
+        alternate.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
         chooser = ScriptedChooser("data-consumer", "data-producer")
-        plan = self.plan("data-status", chooser, overrides={"orders": empty})
+        plan = self.plan("data-status", chooser, overrides={"carts": alternate})
+        self.assertEqual(len(chooser.choices), 2)
         self.assertIn("no rows at data/carts.csv", chooser.choices[1].title)
         self.assertEqual(plan.workflow.name, "data-producer")
+        self.assertEqual(dict(plan.overrides), {})
+
+    def test_picked_producer_gets_its_own_source_picker(self) -> None:
+        self.add_second_hop()
+        self.edit("data-input.yaml", "requires: [carts]", "optional: [carts]")
+        self.write_carts("cartId,productId,sid\nc,p,s\n")
+        chooser = ScriptedChooser("data-consumer", "data/carts.csv (1 row)")
+        plan = self.plan("data-status", chooser)
+        self.assertEqual(
+            chooser.choices[1].title,
+            '"data-consumer" can read "carts" — pick a source (Esc cancels)',
+        )
+        self.assertEqual(plan.workflow.name, "data-consumer")
+        self.assertEqual(plan.produce, ("orders",))
+        self.assertEqual(dict(plan.optional_choices), {"carts": True})
 
     # --- optional data ---------------------------------------------------
 

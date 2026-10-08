@@ -16,6 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.execution import (
+    ExecutionResult,
     build_compose_run_command,
     execute_workflow,
 )
@@ -453,7 +454,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(used_data_paths(self.optional_consumer, {}), {"carts": self.carts_path})
         self.assertEqual(used_data_paths(self.consumer, {}), {"carts": self.carts_path})
 
-    def run_optional_with(self, choices):
+    def run_optional_with(self, choices: dict[str, bool] | None) -> tuple[ExecutionResult, str]:
         out = io.StringIO()
         result = execute_workflow(
             self.optional_consumer,

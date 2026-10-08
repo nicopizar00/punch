@@ -39,7 +39,9 @@ class WorkflowCatalog:
     def recommended_producer(self, dataset: str) -> str | None:
         """First producer, by name, that flags `dataset` as recommended."""
         for name in self.producers_of(dataset):
-            if self.workflows[name].data.product(dataset).recommended:
+            data = self.workflows[name].data
+            product = data.product(dataset) if data is not None else None
+            if product is not None and product.recommended:
                 return name
         return None
 

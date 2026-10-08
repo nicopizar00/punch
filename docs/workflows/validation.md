@@ -34,9 +34,6 @@ Schema (informal — produced by `src/punch/__main__.py`):
   "results": [
     {"test": "smoke", "workflow": "workflows/k6/smoke.yaml", "exitCode": 0,
      "passed": true, "failure": null, "datasets": []}
-    // optional per-result keys:
-    //   "switchedFrom": ["<workflow>", ...]          // only when a producer pick replaced the selected workflow
-    //   "dataSources": {"<dataset>": "default" | "<path>"}  // every dataset the workflow declares it reads
   ],
   "exitCode": 0,
   "passed": true,
@@ -49,6 +46,14 @@ Schema (informal — produced by `src/punch/__main__.py`):
 per-workflow evidence fields. They make missing data, child-process failures,
 and published row counts auditable without treating a prior data file as proof
 of this run.
+
+Optional per-result keys:
+
+- `switchedFrom` (`["<workflow>", ...]`) — present only when a producer pick
+  replaced the selected workflow; lists the workflows left behind, in order.
+- `dataSources` (`{"<dataset>": "default" | "<path>"}`) — present when the
+  workflow declares datasets it reads; each one's path relative to the working
+  directory, or `"default"` when the scenario used its built-in data.
 
 ## Host setup and workflow selection
 
@@ -69,13 +74,18 @@ Datasets are optional and declared in `spec.data`. A producer's
 `[DATA <dataset>]` stdout records are written to `<directory>/<dataset>.csv`
 (header from `columns`) only with `--produce <dataset>`, and published
 atomically only after success. A consumer fails before Docker when a required
-dataset has no rows. In a terminal, `punch run` and the `punch` menu first
-offer each optional dataset's source (built-in default or its data file), then,
-for a dataset with no rows, a producer picker (the `recommended: true` producer
-preselected); the picked producer runs with `--produce`, and `switchedFrom`
-records the replaced workflow. `--no-input` and `--data <dataset>=default` are
-the non-interactive equivalents. The bundled workflows declare no data, so the default CI
-command remains `./bin/punch run all`.
+dataset has no rows. In a terminal, `punch run` and the `punch` menu settle
+data before Docker: each optional dataset offers its sources (built-in default
+or its data file, cursor on default); then, for a dataset the run reads that has
+no rows, an arrow-key list of every producer opens, the `recommended: true` one
+labeled and preselected and producers missing required environment tagged
+`needs <VAR>`. The picked producer runs with `--produce <dataset>` — still one
+Compose run — and the walk continues when it is missing data too; the closing
+hint names the workflow to re-run and what it still misses, and `switchedFrom`
+records the replaced workflow. Esc cancels. Non-interactive equivalents:
+`--no-input`, `--data <dataset>=default`, `--data <dataset>=<path>`, or running
+the producer with `--produce`. The bundled workflows declare no data, so the
+default CI command remains `./bin/punch run all`.
 
 In addition, each test writes its own evidence under `reports/`:
 

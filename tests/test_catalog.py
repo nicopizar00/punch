@@ -32,8 +32,10 @@ class CatalogTests(unittest.TestCase):
 
     def copy_producer(self, name: str, *, recommended: bool = False) -> None:
         text = (self.root / "data-output.yaml").read_text(encoding="utf-8")
+        self.assertIn("name: data-producer", text)
         text = text.replace("name: data-producer", f"name: {name}")
         if recommended:
+            self.assertIn("targets: [data-consumer]", text)
             text = text.replace("targets: [data-consumer]",
                                 "targets: [data-consumer]\n        recommended: true")
         (self.root / f"{name}.yaml").write_text(text, encoding="utf-8")
