@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,15 @@ class SummaryOutput:
 
 
 @dataclass(frozen=True)
+class Sizing:
+    """`spec.sizing`: pace and budget as a sized producer, margin as a sizing target."""
+
+    iteration_seconds: float | None = None
+    max_seconds: float | None = None
+    margin: float = 0.0
+
+
+@dataclass(frozen=True)
 class K6Workflow:
     source_path: Path
     name: str
@@ -59,11 +69,13 @@ class K6Workflow:
     data: DataSpec | None
     summary_output: SummaryOutput | None
     description: str = ""
+    sizing: Sizing | None = None
 
 
 ROOT_KEYS = {"apiVersion", "kind", "metadata", "spec"}
 METADATA_KEYS = {"name", "description"}
-SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs", "data"}
+SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs", "data", "sizing"}
+SIZING_KEYS = {"iterationSeconds", "maxSeconds", "margin"}
 COMPOSE_KEYS = {"file", "service"}
 K6_KEYS = {"script"}
 ENVIRONMENT_KEYS = {"forward", "required"}
@@ -242,6 +254,30 @@ def _data_spec(value: Any, working_directory: Path) -> DataSpec:
     return DataSpec(directory, mounted_at, tuple(produces), tuple(requires), tuple(optional))
 
 
+def _sizing_number(sizing: dict[str, Any], key: str, *, allow_zero: bool) -> float | None:
+    if key not in sizing:
+        return None
+    value = sizing[key]
+    field = f"spec.sizing.{key}"
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise WorkflowError(f"{field} must be a number")
+    if allow_zero and value < 0:
+        raise WorkflowError(f"{field} must be 0 or greater")
+    if not allow_zero and value <= 0:
+        raise WorkflowError(f"{field} must be greater than 0")
+    return value
+
+
+def _sizing(value: Any) -> Sizing:
+    sizing = _allowed_keys(value, SIZING_KEYS, "spec.sizing")
+    margin = _sizing_number(sizing, "margin", allow_zero=True)
+    return Sizing(
+        iteration_seconds=_sizing_number(sizing, "iterationSeconds", allow_zero=False),
+        max_seconds=_sizing_number(sizing, "maxSeconds", allow_zero=False),
+        margin=0.0 if margin is None else margin,
+    )
+
+
 def load_workflow(path: Path) -> K6Workflow:
     source_path = Path(path).resolve()
     try:
@@ -296,6 +332,7 @@ def load_workflow(path: Path) -> K6Workflow:
 
     outputs = _allowed_keys(spec.get("outputs", {}), OUTPUT_KEYS, "outputs")
     data = _data_spec(spec["data"], working_directory) if "data" in spec else None
+    sizing = _sizing(spec["sizing"]) if "sizing" in spec else None
 
     summary_output = None
     if "summary" in outputs:
@@ -320,4 +357,5 @@ def load_workflow(path: Path) -> K6Workflow:
         data=data,
         summary_output=summary_output,
         description=description,
+        sizing=sizing,
     )

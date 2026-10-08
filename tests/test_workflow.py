@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from punch.workflow import WorkflowError, load_workflow
+from punch.workflow import Sizing, WorkflowError, load_workflow
 
 
 VALID_WORKFLOW = """\
@@ -331,6 +331,49 @@ class LoadWorkflowTests(unittest.TestCase):
             ("        targets: [order-status]\n",
              "        targets: [order-status]\n        recommended: \"yes\"\n"),
         )
+
+    SIZING_ANCHOR = "    requires: [carts]\n"
+
+    def with_sizing(self, block: str) -> tuple[str, str]:
+        return (self.SIZING_ANCHOR, self.SIZING_ANCHOR + block)
+
+    def test_sizing_defaults_to_none(self) -> None:
+        self.assertIsNone(load_workflow(self.workflow_path).sizing)
+
+    def test_reads_sizing(self) -> None:
+        self.write_workflow(
+            self.workflow_path,
+            self.with_sizing(
+                "  sizing:\n    iterationSeconds: 1.5\n    maxSeconds: 270\n    margin: 0.15\n"
+            ),
+        )
+        self.assertEqual(
+            load_workflow(self.workflow_path).sizing,
+            Sizing(iteration_seconds=1.5, max_seconds=270, margin=0.15),
+        )
+
+    def test_empty_sizing_is_a_target_with_zero_margin(self) -> None:
+        self.write_workflow(self.workflow_path, self.with_sizing("  sizing: {}\n"))
+        self.assertEqual(load_workflow(self.workflow_path).sizing, Sizing())
+
+    def test_rejects_invalid_sizing(self) -> None:
+        cases = [
+            ("  sizing:\n", "spec.sizing must be a mapping"),
+            ("  sizing:\n    unknown: 1\n", "unknown field spec.sizing.unknown"),
+            ("  sizing:\n    margin: -1\n", "spec.sizing.margin must be 0 or greater"),
+            ("  sizing:\n    iterationSeconds: 0\n",
+             "spec.sizing.iterationSeconds must be greater than 0"),
+            ("  sizing:\n    maxSeconds: -5\n", "spec.sizing.maxSeconds must be greater than 0"),
+            ("  sizing:\n    maxSeconds: true\n", "spec.sizing.maxSeconds must be a number"),
+            ('  sizing:\n    iterationSeconds: "1"\n',
+             "spec.sizing.iterationSeconds must be a number"),
+            ("  sizing:\n    margin: .inf\n", "spec.sizing.margin must be a number"),
+            ("  sizing:\n    iterationSeconds: .nan\n",
+             "spec.sizing.iterationSeconds must be a number"),
+        ]
+        for block, message in cases:
+            with self.subTest(block=block):
+                self.assertWorkflowError(message, self.with_sizing(block))
 
 if __name__ == "__main__":
     unittest.main()
