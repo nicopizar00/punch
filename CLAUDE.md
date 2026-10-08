@@ -54,6 +54,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │       ├── __main__.py               # argparse CLI; streams docker compose
     │       ├── menu.py                   # `punch menu` interactive workflow picker
     │       ├── data_plan.py              # data-source + producer pickers before Docker (stdlib-only)
+    │       ├── sizing.py                 # size a producer run for a target's rows (stdlib-only)
     │       └── init_scan.py              # `punch init` bootstrap scanner / readiness mapper
     ├── dist/                             # bundled k6-ready JS (gitignored)
     ├── reports/                          # k6 output (gitignored)
@@ -190,7 +191,8 @@ Python CLI reaches feature parity):
   consumers fail before Docker until their datasets exist. On a TTY,
   `src/punch/data_plan.py` first offers optional-dataset sources and, for
   missing data, a producer to run instead (still one Compose run);
-  `--no-input` skips the pickers.
+  `--no-input` skips the pickers. `src/punch/sizing.py` sizes a producer for
+  a target from `spec.sizing` (menu options mode, `--size-for`).
 - A change is not "done" until `reports/state/punch-run.json` records the
   Test run. See `docs/workflows/validation.md`.
 - Propose changes in small, reviewable steps. Do not implement a full feature

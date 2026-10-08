@@ -54,6 +54,11 @@ Optional per-result keys:
 - `dataSources` (`{"<dataset>": "default" | "<path>"}`) — present when the
   workflow declares datasets it reads; each one's path relative to the working
   directory, or `"default"` when the scenario used its built-in data.
+- `sizing` — present when `--size-for` sized the run: `target`, `datasets`,
+  `shape` (the target's `ITERATIONS`/`VUS`/`DURATION` used), `preset`
+  (`null` on the CLI), `rowsNeeded`, `margin`, `producerIterations`,
+  `producerVus`, `producedRows` (`{"<dataset>": <count>}`), and `short`
+  (`true` when a sized dataset has fewer rows than `rowsNeeded`).
 
 ## Host setup and workflow selection
 
@@ -79,13 +84,18 @@ data before Docker: each optional dataset offers its sources (built-in default
 or its data file, cursor on default); then, for a dataset the run reads that has
 no rows, an arrow-key list of every producer opens, the `recommended: true` one
 labeled and preselected and producers missing required environment tagged
-`needs <VAR>`. The picked producer runs with `--produce <dataset>` — still one
-Compose run — and the walk continues when it is missing data too; the closing
-hint names the workflow to re-run and what it still misses, and `switchedFrom`
-records the replaced workflow. Esc cancels. Non-interactive equivalents:
-`--no-input`, `--data <dataset>=default`, `--data <dataset>=<path>`, or running
-the producer with `--produce`. The bundled workflows declare no data, so the
-default CI command remains `./bin/punch run all`.
+`needs <VAR>`. `punch run` runs the picked producer with `--produce <dataset>`
+and the menu continues as for a direct pick (asking before writing) — still
+one Compose run — and the walk continues when it is missing data too; the
+closing hint names the workflow to re-run and what it still misses, and
+`switchedFrom` records the replaced workflow. Esc cancels. Non-interactive
+equivalents: `--no-input`, `--data <dataset>=default`,
+`--data <dataset>=<path>`, or running the producer with `--produce`. A
+producer can instead be sized for a target with `spec.sizing` — the menu's
+`Size for a target workflow` mode or `punch run <producer> --size-for <target>`
+— which prints the estimate, writes the sized datasets, and warns when fewer
+rows came out than the target needs. The bundled workflows declare no data, so
+the default CI command remains `./bin/punch run all`.
 
 In addition, each test writes its own evidence under `reports/`:
 

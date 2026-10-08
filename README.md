@@ -19,6 +19,7 @@ docker compose build
 ./bin/punch run path/to/workflow.yaml
 ./bin/punch run path/to/producer.yaml --produce orders
 ./bin/punch run path/to/consumer.yaml --data orders=data/batch-2.csv
+./bin/punch run path/to/producer.yaml --size-for consumer   # size it for consumer's ITERATIONS/VUS/DURATION
 ./bin/punch menu path/to/workflows-dir   # interactively pick + run a workflow
 ```
 
@@ -29,6 +30,10 @@ Workflows exchange data through named datasets declared in `spec.data`:
 
 ```yaml
 spec:
+  sizing:                    # optional; see "Sizing for a target"
+    iterationSeconds: 1.0    # one iteration on one VU
+    maxSeconds: 270          # budget when sized as a producer
+    margin: 0.15             # extra rows when sized for as a target
   data:
     directory: data            # host dir, beneath workingDirectory
     mountedAt: /scripts/data   # same dir inside the container
@@ -58,11 +63,25 @@ spec:
   no rows, an arrow-key list of every producer opens — the one whose product
   sets `recommended: true` labeled and preselected (first by name if
   several), producers missing required environment tagged `needs <VAR>`.
-  Picking one runs it with `--produce <dataset>` — still one Compose run —
-  and walks further when it is missing data too; the hint names the workflow
+  `punch run` runs the picked one with `--produce <dataset>`; the menu
+  continues exactly as if it had been picked directly (it asks before
+  writing) — still one Compose run — and walks further when it is missing
+  data too; the hint names the workflow
   to re-run and what it still misses. Esc cancels. Non-interactive
   equivalents: `--no-input`, `--data <dataset>=default`,
   `--data <dataset>=<path>`, or run the producer with `--produce`.
+- **Sizing for a target.** A producer that declares `spec.sizing`
+  `iterationSeconds` + `maxSeconds` and forwards `ITERATIONS` and `VUS` can
+  be sized for any `produces[].targets` workflow that declares
+  `spec.sizing`. Punch reads the target's load shape — `ITERATIONS`, or
+  `VUS` + `DURATION` with the target's `iterationSeconds`, only from names
+  the target forwards — adds the target's `margin`, and runs the producer
+  with `ITERATIONS=⌈rows × (1 + margin)⌉`, just enough `VUS` to finish
+  inside `maxSeconds`, and no `DURATION`. The menu offers
+  `Options as usual` / `Size for a target workflow` (when `options/` has
+  presets) and asks for the target's preset; `--size-for <target>` reads
+  the shape from the environment. Fewer produced rows than the target needs
+  prints a warning; the exit code is unchanged.
 - An optional dataset (`optional: [...]`) is used when its file has at least
   one row: Punch injects `DATA_<DATASET>_CSV` as for a required one. When the
   file is missing or header-only, the variable is left unset, the run
