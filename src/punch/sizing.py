@@ -180,3 +180,78 @@ def producer_environment(environment: Mapping[str, str], plan: SizingPlan) -> di
     sized[ITERATIONS] = str(plan.iterations)
     sized[VUS] = str(plan.vus)
     return sized
+
+
+def _rows(count: int) -> str:
+    return f"{count} row" if count == 1 else f"{count} rows"
+
+
+def _decimal(value: Fraction) -> str:
+    return str(value.numerator) if value.denominator == 1 else str(float(value))
+
+
+def _shape_text(plan: SizingPlan) -> str:
+    return " ".join(f"{name}={value}" for name, value in plan.shape.items())
+
+
+def summary_lines(plan: SizingPlan) -> list[str]:
+    assert plan.producer.sizing is not None and plan.producer.sizing.max_seconds is not None
+    budget = plan.producer.sizing.max_seconds
+    budget_text = _decimal(_exact(budget))
+    shape = _shape_text(plan)
+    lines = [
+        f"[punch] sizing {plan.producer.name} for {plan.target.name} ({plan.preset or shape})",
+        f"  rows needed   : {plan.rows_needed}  ({shape})",
+        f"  margin {_decimal(_exact(plan.margin) * 100)}%   : "
+        f"{plan.iterations} producer iterations",
+        f"  producer VUS  : {plan.vus}  "
+        f"(~{math.ceil(plan.estimated_seconds)}s of {budget_text}s budget)",
+    ]
+    if plan.estimated_seconds > budget:
+        lines.append(
+            f"[punch] warning: one {plan.producer.name} iteration exceeds its "
+            f"{budget_text}s budget"
+        )
+    return lines
+
+
+def input_warnings(plan: SizingPlan, row_counts: Mapping[str, int]) -> list[str]:
+    """One warning per dataset the producer reads with fewer rows than its iterations."""
+    return [
+        f'[punch] warning: {plan.producer.name} reads "{dataset}" ({_rows(rows)}) '
+        f"but runs {plan.iterations} iterations; rows repeat"
+        for dataset, rows in row_counts.items()
+        if rows < plan.iterations
+    ]
+
+
+def shortfall(plan: SizingPlan, produced: Mapping[str, int]) -> list[str]:
+    return [
+        f'[punch] warning: "{dataset}" has {_rows(produced.get(dataset, 0))}; '
+        f"{plan.target.name} needs {plan.rows_needed}"
+        for dataset in plan.datasets
+        if produced.get(dataset, 0) < plan.rows_needed
+    ]
+
+
+def next_hint(plan: SizingPlan, produced: Mapping[str, int]) -> str:
+    ready = ", ".join(
+        f"{dataset} ready ({_rows(produced.get(dataset, 0))})" for dataset in plan.datasets
+    )
+    return f"[punch] {ready}; run {plan.target.name} next with {plan.preset or _shape_text(plan)}."
+
+
+def sizing_evidence(plan: SizingPlan, produced: Mapping[str, int]) -> dict:
+    rows = {dataset: produced.get(dataset, 0) for dataset in plan.datasets}
+    return {
+        "target": plan.target.name,
+        "datasets": list(plan.datasets),
+        "shape": dict(plan.shape),
+        "preset": plan.preset,
+        "rowsNeeded": plan.rows_needed,
+        "margin": plan.margin,
+        "producerIterations": plan.iterations,
+        "producerVus": plan.vus,
+        "producedRows": rows,
+        "short": any(count < plan.rows_needed for count in rows.values()),
+    }

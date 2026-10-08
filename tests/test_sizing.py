@@ -11,12 +11,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from punch.catalog import load_catalog
 from punch.sizing import (
     SizingError,
+    input_warnings,
     is_sizable_producer,
+    next_hint,
     parse_duration,
     producer_environment,
     rows_needed,
+    shortfall,
     size_producer,
+    sizing_evidence,
     sizing_pairs,
+    summary_lines,
 )
 
 SHAPE = ["ITERATIONS", "VUS", "DURATION"]
@@ -219,6 +224,78 @@ class ProducerEnvironmentTests(SizingCase):
             {"BASE_URL": "http://x", "ITERATIONS": "58", "VUS": "1"},
         )
         self.assertEqual(environment["DURATION"], "5m")  # input untouched
+
+
+class SizingTextTests(SizingCase):
+    def test_summary_lines_with_preset(self) -> None:
+        plan = self.size({"ITERATIONS": "5"}, preset="5-iterations")
+        self.assertEqual(summary_lines(plan), [
+            "[punch] sizing producer for consumer (5-iterations)",
+            "  rows needed   : 5  (ITERATIONS=5)",
+            "  margin 15%   : 6 producer iterations",
+            "  producer VUS  : 1  (~6s of 270s budget)",
+        ])
+
+    def test_summary_lines_without_preset_show_the_shape(self) -> None:
+        lines = summary_lines(self.size({"VUS": "5", "DURATION": "5m"}))
+        self.assertEqual(lines[0], "[punch] sizing producer for consumer (VUS=5 DURATION=5m)")
+        self.assertEqual(lines[3], "  producer VUS  : 4  (~216s of 270s budget)")
+
+    def test_fractional_margin_and_budget(self) -> None:
+        self.write_producer(sizing={"iterationSeconds": 1, "maxSeconds": 90.5})
+        self.write_consumer(sizing={"margin": 0.125})
+        lines = summary_lines(self.size({"ITERATIONS": "8"}))
+        self.assertEqual(lines[2], "  margin 12.5%   : 9 producer iterations")
+        self.assertEqual(lines[3], "  producer VUS  : 1  (~9s of 90.5s budget)")
+
+    def test_budget_warning_when_one_iteration_exceeds_it(self) -> None:
+        self.assertEqual(len(summary_lines(self.size({"ITERATIONS": "5"}))), 4)
+        self.write_producer(sizing={"iterationSeconds": 600, "maxSeconds": 270})
+        self.assertEqual(
+            summary_lines(self.size({"ITERATIONS": "5"}))[-1],
+            "[punch] warning: one producer iteration exceeds its 270s budget",
+        )
+
+    def test_input_warnings_name_small_inputs(self) -> None:
+        plan = self.size({"ITERATIONS": "5"})  # 6 producer iterations
+        self.assertEqual(input_warnings(plan, {"carts": 5, "users": 6, "x": 1}), [
+            '[punch] warning: producer reads "carts" (5 rows) but runs 6 iterations; rows repeat',
+            '[punch] warning: producer reads "x" (1 row) but runs 6 iterations; rows repeat',
+        ])
+
+    def test_shortfall_compares_against_rows_needed(self) -> None:
+        plan = self.size({"ITERATIONS": "5"})
+        self.assertEqual(shortfall(plan, {"carts": 4}),
+                         ['[punch] warning: "carts" has 4 rows; consumer needs 5'])
+        self.assertEqual(shortfall(plan, {"carts": 5}), [])
+        self.assertEqual(shortfall(plan, {}),
+                         ['[punch] warning: "carts" has 0 rows; consumer needs 5'])
+
+    def test_next_hint_names_target_and_shape(self) -> None:
+        self.assertEqual(
+            next_hint(self.size({"ITERATIONS": "5"}, preset="5-iterations"), {"carts": 6}),
+            "[punch] carts ready (6 rows); run consumer next with 5-iterations.",
+        )
+        self.assertEqual(
+            next_hint(self.size({"ITERATIONS": "5"}), {"carts": 1}),
+            "[punch] carts ready (1 row); run consumer next with ITERATIONS=5.",
+        )
+
+    def test_sizing_evidence(self) -> None:
+        plan = self.size({"ITERATIONS": "5"}, preset="5-iterations")
+        self.assertEqual(sizing_evidence(plan, {"carts": 4}), {
+            "target": "consumer",
+            "datasets": ["carts"],
+            "shape": {"ITERATIONS": "5"},
+            "preset": "5-iterations",
+            "rowsNeeded": 5,
+            "margin": 0.15,
+            "producerIterations": 6,
+            "producerVus": 1,
+            "producedRows": {"carts": 4},
+            "short": True,
+        })
+        self.assertFalse(sizing_evidence(plan, {"carts": 6})["short"])
 
 
 if __name__ == "__main__":
