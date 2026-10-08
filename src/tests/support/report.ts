@@ -16,12 +16,35 @@ export interface ReportMeta {
   targetUrl: string;
 }
 
+interface RequestMetrics {
+  count: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  failed: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  duration: any;
+}
+
+// Protocol runs report http_*; k6 browser runs report browser_http_* and no
+// request counter, so their count is the failed rate's passes + fails.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function requestMetrics(metrics: any): RequestMetrics {
+  const prefix = metrics['http_req_duration'] || !metrics['browser_http_req_duration']
+    ? 'http'
+    : 'browser_http';
+  const failed = metrics[`${prefix}_req_failed`]?.values;
+  const duration = metrics[`${prefix}_req_duration`]?.values;
+  const count = metrics[`${prefix}_reqs`]?.values?.count
+    ?? (failed ? (failed.passes ?? 0) + (failed.fails ?? 0) : 0);
+  return { count, failed, duration };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function buildSummaryJson(data: any, meta: ReportMeta): SummaryJson {
   const metrics = data.metrics ?? {};
-  const errorRate = metrics['http_req_failed']?.values?.rate ?? 1;
+  const requests = requestMetrics(metrics);
+  const errorRate = requests.failed?.rate ?? 1;
   const checkRate = metrics['checks']?.values?.rate ?? 0;
-  const p90 = metrics['http_req_duration']?.values?.['p(90)'] ?? 0;
+  const p90 = requests.duration?.['p(90)'] ?? 0;
 
   // If k6 produced threshold evaluation results, base pass/fail on those.
   let passed: boolean | null = null;
@@ -48,7 +71,7 @@ export function buildSummaryJson(data: any, meta: ReportMeta): SummaryJson {
     testType: meta.testType,
     targetUrl: meta.targetUrl,
     durationMs: data.state?.testRunDurationMs ?? 0,
-    totalRequests: metrics['http_reqs']?.values?.count ?? 0,
+    totalRequests: requests.count,
     errorRate: errorRate,
     p90Ms: p90,
     checkPassRate: checkRate,
@@ -71,11 +94,14 @@ export function buildHtml(data: any, meta: ReportMeta): string {
   const checks = collectChecks(data.root_group ?? {});
   const durationMs: number = data.state?.testRunDurationMs ?? 0;
 
-  const httpReqs = metrics['http_reqs']?.values?.count ?? 0;
-  const reqRate = ((metrics['http_reqs']?.values?.rate ?? 0) as number).toFixed(2);
-  const p95 = ((metrics['http_req_duration']?.values?.['p(95)'] ?? 0) as number).toFixed(2);
-  const avg = ((metrics['http_req_duration']?.values?.avg ?? 0) as number).toFixed(2);
-  const errorRate = (((metrics['http_req_failed']?.values?.rate ?? 0) as number) * 100).toFixed(2);
+  const requests = requestMetrics(metrics);
+  const httpReqs = requests.count;
+  const reqRate = ((metrics['http_reqs']?.values?.rate
+    ?? (durationMs > 0 ? httpReqs / (durationMs / 1000) : 0)) as number).toFixed(2);
+  const p95 = ((requests.duration?.['p(95)'] ?? 0) as number).toFixed(2);
+  const avg = ((requests.duration?.avg ?? 0) as number).toFixed(2);
+  const p90 = ((requests.duration?.['p(90)'] ?? 0) as number).toFixed(2);
+  const errorRate = (((requests.failed?.rate ?? 0) as number) * 100).toFixed(2);
   const checkRate = (((metrics['checks']?.values?.rate ?? 0) as number) * 100).toFixed(2);
 
   const passed = Number(errorRate) < 1 && Number(checkRate) >= 99;
@@ -137,7 +163,7 @@ ${thresholdRows.join('\n')}
     <tr><td>Total requests</td><td>${httpReqs}</td></tr>
     <tr><td>Request rate</td><td>${reqRate} req/s</td></tr>
     <tr><td>Avg response time</td><td>${avg} ms</td></tr>
-    <tr><td>p90 response time</td><td>${((metrics['http_req_duration']?.values?.['p(90)'] ?? 0) as number).toFixed(2)} ms</td></tr>
+    <tr><td>p90 response time</td><td>${p90} ms</td></tr>
     <tr><td>Error rate</td><td>${errorRate}%</td></tr>
     <tr><td>Check pass rate</td><td>${checkRate}%</td></tr>
   </table>
