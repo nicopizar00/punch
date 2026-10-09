@@ -6,6 +6,16 @@ A didactic performance testing playground for k6 written in TypeScript, packaged
 
 Demonstrate a maintainable, end-to-end performance testing pipeline — from a multi-service reference application through to GitHub Actions artifact transfer — that is easy to read, extend, and adopt.
 
+## Architecture
+
+Start with the
+[Reference Architecture and Implementation Guide](docs/architecture/reference-architecture-and-implementation-guide.md)
+for the solution model, option-versus-target selection semantics, design
+trade-offs, and a clean-room reproduction path for restricted enterprise
+environments. The shorter
+[Architectural Boundaries](docs/architecture/punch-boundaries.md) document remains
+the ownership map for contributors.
+
 ## Quick start
 
 Requires Docker, Python 3.10+, and the pinned Python requirements. No Node or

@@ -4,6 +4,10 @@ This document is the authoritative map of **who owns what** in Punch. Every
 prompt, skill, agent, and instruction file in this repo points back here.
 Most "why did this go wrong?" answers map to a boundary crossing.
 
+For the full component model, selection flows, design trade-offs, and independent
+reproduction steps, see the
+[Reference Architecture and Implementation Guide](reference-architecture-and-implementation-guide.md).
+
 ## Layered ownership
 
 ```
