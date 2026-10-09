@@ -17,6 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from punch.menu import discover_workflows, run_menu
 
 DEFAULT_BASE_URL = "http://host.docker.internal:3001"
+ITERATIONS_5 = {"scenarios": {"default": {
+    "executor": "shared-iterations", "vus": 1, "iterations": 5, "maxDuration": "5m",
+}}}
+CONSTANT_5_VUS_5M = {"scenarios": {"default": {
+    "executor": "constant-vus", "vus": 5, "duration": "5m",
+}}}
 DEFAULT_BROWSER_BASE_URL = "http://host.docker.internal:3000"
 
 
@@ -96,10 +102,11 @@ class MenuTests(unittest.TestCase):
         service: str = "k6",
         description: str | None = None,
         sizing: dict | None = None,
+        config: str | None = None,
     ) -> Path:
-        environment = ""
+        environment = f"    config: {config}\n" if config else ""
         if forward:
-            environment = "  environment:\n    forward: [" + ", ".join(forward) + "]\n"
+            environment += "  environment:\n    forward: [" + ", ".join(forward) + "]\n"
         data = ""
         if produces or requires or optional:
             data = "  data:\n    directory: data\n    mountedAt: /scripts/data\n"
@@ -610,9 +617,16 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(self.fake_docker_calls(), [])
 
+    def mount(self, path: Path) -> str:
+        return f"{path.resolve()}:/punch/k6-config.json:ro"
+
+    def assertRunsWithConfig(self, call: list[str], path: Path) -> None:
+        self.assertIn(self.mount(path), call)
+        self.assertEqual(call[-2:], ["--config", "/punch/k6-config.json"])
+
     def test_discover_options_lists_json_files_sorted(self) -> None:
-        self.write_options("b-preset", {"VUS": 2})
-        self.write_options("a-preset", {"VUS": 1})
+        self.write_options("b-preset", ITERATIONS_5)
+        self.write_options("a-preset", ITERATIONS_5)
         from punch.menu import discover_options
 
         self.assertEqual(
@@ -620,86 +634,74 @@ class MenuTests(unittest.TestCase):
             ["a-preset", "b-preset"],
         )
 
-    def test_options_preset_is_forwarded_to_compose_run(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
-        self.write_options("5-vus", {"VUS": 5})
+    def test_options_preset_is_passed_as_k6_config(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL"])
+        preset = self.write_options("5-iterations", ITERATIONS_5)
         with self.select_menu(0, 0, 0, 1):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
-        self.assertIn("VUS=5", call)
+        self.assertRunsWithConfig(call, preset)
 
-    def test_skipping_options_preset_leaves_var_unforwarded(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
-        self.write_options("5-vus", {"VUS": 5})
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VUS", None)
-            with self.select_menu(0, 0, 0, 0):
-                rc = run_menu(self.root, options_dir=self.root_options_dir())
+    def test_workflow_default_entry_keeps_spec_config(self) -> None:
+        default = self.write_options("5-iterations", ITERATIONS_5)
+        self.write_options("5-vu-5m", CONSTANT_5_VUS_5M)
+        self.write_workflow("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
+        with self.select_menu(0, 0, 0, 0):
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
-        self.assertFalse(any(part.startswith("VUS=") for part in call))
+        self.assertRunsWithConfig(call, default)
 
     def test_missing_options_dir_skips_step(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
-        with self.select_menu(0, 0, 0):
-            rc = run_menu(self.root, options_dir=self.root_options_dir())
-        self.assertEqual(rc, 0)
-        self.assertEqual(len(self.fake_docker_calls()), 1)
-
-    def test_workflow_without_extra_forward_vars_skips_options_step(self) -> None:
         self.write_workflow("fixture", forward=["BASE_URL"])
-        self.write_options("5-vus", {"VUS": 5})
         with self.select_menu(0, 0, 0):
-            rc = run_menu(self.root, options_dir=self.root_options_dir())
-        self.assertEqual(rc, 0)
-        self.assertEqual(len(self.fake_docker_calls()), 1)
-
-    def test_all_options_shown_even_if_workflow_does_not_forward_every_var(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
-        self.write_options("5-vu-5m", {"VUS": 5, "DURATION": "5m"})
-        with self.select_menu(0, 0, 0, 1):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
-        self.assertIn("VUS=5", call)
-        # DURATION isn't in this workflow's forward list, so it's dropped at
-        # the compose-run boundary even though the preset stayed selectable.
-        self.assertFalse(any(part.startswith("DURATION=") for part in call))
+        self.assertNotIn("--config", call)
 
-    def test_options_menu_defaults_cursor_to_5_iterations(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL", "VUS", "ITERATIONS"])
-        self.write_options("1-iteration", {"ITERATIONS": 1})
-        self.write_options("5-iterations", {"ITERATIONS": 5})
-        calls: list[tuple[list[str], int]] = []
-
-        def fake_terminal_menu(entries, *, title, cursor_index=0):
-            calls.append((entries, cursor_index))
-            return _SelectedMenu(0)
-
-        with patch("sys.stdin", _ConfirmedTerminal()):
-            with patch("punch.menu.TerminalMenu", side_effect=fake_terminal_menu):
-                rc = run_menu(self.root, options_dir=self.root_options_dir())
+    def test_options_step_is_offered_to_workflows_forwarding_only_base_url(self) -> None:
+        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_options("5-iterations", ITERATIONS_5)
+        with self.record_menus(0, 0, 0, 0) as calls:
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
-        options_entries, options_cursor_index = calls[-1]
-        self.assertEqual(options_entries[options_cursor_index], "5-iterations")
+        self.assertEqual(calls[3][0], ["Workflow default (script options)", "5-iterations"])
+        [call] = self.fake_docker_calls()
+        self.assertNotIn("--config", call)
+
+    def test_options_menu_starts_on_the_workflow_default(self) -> None:
+        self.write_options("1-iteration", {"iterations": 1})
+        self.write_options("5-iterations", ITERATIONS_5)
+        self.write_workflow("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
+        with self.record_menus(0, 0, 0, 0) as calls:
+            rc = run_menu(self.root, options_dir=self.root_options_dir())
+        self.assertEqual(rc, 0)
+        entries, options = calls[-1]
+        self.assertEqual(entries, ["Workflow default (5-iterations)", "1-iteration", "5-iterations"])
+        self.assertEqual(options["cursor_index"], 0)
 
     def test_canceling_options_menu_does_not_run_workflow(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
-        self.write_options("5-vus", {"VUS": 5})
+        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_options("5-iterations", ITERATIONS_5)
         with self.select_menu(0, 0, 0, None):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
 
-    def test_malformed_options_json_warns_and_skips_merge(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL", "VUS"])
+    def test_malformed_options_json_warns_and_uses_the_workflow_default(self) -> None:
+        default = self.write_options("5-iterations", ITERATIONS_5)
         self.write_options("broken", "not json")
-        with self.select_menu(0, 0, 0, 1):
+        self.write_workflow("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
+        errors = io.StringIO()
+        # entries: workflow default, 5-iterations, broken
+        with self.select_menu(0, 0, 0, 2), patch("sys.stderr", errors):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
+        self.assertIn("could not read k6 config", errors.getvalue())
         [call] = self.fake_docker_calls()
-        self.assertFalse(any(part.startswith("VUS=") for part in call))
+        self.assertRunsWithConfig(call, default)
 
     def test_default_options_dir_is_sibling_of_workflows_dir(self) -> None:
         workflows_dir = self.root / "workflows"
@@ -712,35 +714,36 @@ class MenuTests(unittest.TestCase):
                 name="fixture",
                 description="",
                 service="k6",
-                environment="  environment:\n    forward: [BASE_URL, VUS]\n",
+                environment="  environment:\n    forward: [BASE_URL]\n",
                 data="",
             ),
             encoding="utf-8",
         )
         options_dir = self.root / "options"
         options_dir.mkdir()
-        (options_dir / "5-vus.json").write_text(json.dumps({"VUS": 5}), encoding="utf-8")
+        preset = options_dir / "5-iterations.json"
+        preset.write_text(json.dumps(ITERATIONS_5), encoding="utf-8")
         with self.select_menu(0, 0, 0, 1):
             rc = run_menu(workflows_dir)
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
-        self.assertIn("VUS=5", call)
+        self.assertRunsWithConfig(call, preset)
 
 
     SIZED_PRODUCER = {"iterationSeconds": 1, "maxSeconds": 270}
 
     def write_sized_pair(self, *, presets: bool = True) -> None:
         self.write_workflow(
-            "producer", forward=["BASE_URL", "VUS", "DURATION", "ITERATIONS"],
+            "producer", forward=["BASE_URL"],
             produces={"orders": ["consumer"]}, sizing=self.SIZED_PRODUCER,
         )
         self.write_workflow(
-            "consumer", forward=["BASE_URL", "VUS", "ITERATIONS"],
+            "consumer", forward=["BASE_URL"],
             requires=["orders"], sizing={"margin": 0.15},
         )
         if presets:
-            self.write_options("5-iterations", {"ITERATIONS": 5})
-            self.write_options("5-vu-5m", {"VUS": 5, "DURATION": "5m"})
+            self.write_options("5-iterations", ITERATIONS_5)
+            self.write_options("5-vu-5m", CONSTANT_5_VUS_5M)
 
     @staticmethod
     def orders_stdout(count: int) -> str:
@@ -748,14 +751,27 @@ class MenuTests(unittest.TestCase):
 
     def run_sized(self, *indices: int | None, rows: int = 6):
         output = io.StringIO()
-        environment = {"FAKE_DOCKER_STDOUT": self.orders_stdout(rows), "DURATION": "5m"}
+        environment = {"FAKE_DOCKER_STDOUT": self.orders_stdout(rows)}
         with patch.dict(os.environ, environment):
             with self.record_menus(*indices) as calls, patch("sys.stdout", output):
                 with patch("builtins.input", return_value="n") as prompt:
-                    rc = run_menu(self.root, options_dir=self.root_options_dir())
+                    rc = run_menu(
+                        self.root, options_dir=self.root_options_dir(), state_dir=self.state_dir
+                    )
         return rc, calls, output.getvalue(), prompt
 
-    def test_sized_run_overrides_shape_and_writes_without_asking(self) -> None:
+    @property
+    def state_dir(self) -> Path:
+        return self.root / "state"
+
+    def assertSizedRun(self, call: list[str], iterations: int, vus: int = 1) -> None:
+        sized = self.state_dir / "k6-config-producer.json"
+        self.assertRunsWithConfig(call, sized)
+        self.assertEqual(
+            json.loads(sized.read_text(encoding="utf-8")), {"vus": vus, "iterations": iterations}
+        )
+
+    def test_sized_run_writes_a_producer_config_without_asking(self) -> None:
         self.write_sized_pair()
         # top-level, workflow (producer=1), base URL (0), mode (size=1), preset (5-iterations=0)
         rc, calls, text, prompt = self.run_sized(0, 1, 0, 1, 0)
@@ -765,15 +781,14 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(calls[3][1]["title"], "Load options:")
         self.assertEqual(
             calls[4][0],
-            ["5-iterations", "5-vu-5m  (not estimable: consumer does not forward DURATION)"],
+            ["5-iterations",
+             "5-vu-5m  (not estimable: consumer declares no sizing.iterationSeconds)"],
         )
         self.assertEqual(calls[4][1]["title"], "Load options for consumer:")
         self.assertEqual(calls[4][1]["cursor_index"], 0)
         prompt.assert_not_called()
         [call] = self.fake_docker_calls()
-        self.assertIn("ITERATIONS=6", call)
-        self.assertIn("VUS=1", call)
-        self.assertFalse(any(part.startswith("DURATION=") for part in call))
+        self.assertSizedRun(call, 6)
         self.assertEqual(
             (self.root / "data" / "orders.csv").read_text(encoding="utf-8"),
             "id\n1\n2\n3\n4\n5\n6\n",
@@ -781,7 +796,7 @@ class MenuTests(unittest.TestCase):
         for line in (
             '[punch] sizing for consumer ("orders")',
             "[punch] sizing producer for consumer (5-iterations)",
-            "  rows needed   : 5  (ITERATIONS=5)",
+            "  rows needed   : 5  (shared-iterations vus=1 iterations=5)",
             "  margin 15%   : 6 producer iterations",
             "  producer VUS  : 1  (~6s of 270s budget)",
             '[punch] writing "orders" (sized for consumer)',
@@ -789,6 +804,18 @@ class MenuTests(unittest.TestCase):
         ):
             self.assertIn(line, text)
         self.assertNotIn("warning", text)
+
+    def test_target_preset_cursor_starts_on_the_target_config(self) -> None:
+        self.write_sized_pair()
+        self.write_workflow(
+            "consumer", forward=["BASE_URL"], requires=["orders"],
+            sizing={"iterationSeconds": 2, "margin": 0.15}, config="options/5-vu-5m.json",
+        )
+        rc, calls, _, _ = self.run_sized(0, 1, 0, 1, 1, rows=863)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[4][1]["cursor_index"], 1)
+        [call] = self.fake_docker_calls()
+        self.assertSizedRun(call, 863, vus=4)
 
     def test_not_estimable_preset_re_asks(self) -> None:
         self.write_sized_pair()
@@ -798,7 +825,7 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(calls[5][1]["title"], "Load options for consumer:")
         self.assertEqual(calls[5][1]["cursor_index"], 1)
         [call] = self.fake_docker_calls()
-        self.assertIn("ITERATIONS=6", call)
+        self.assertSizedRun(call, 6)
 
     def test_esc_on_target_preset_cancels_before_docker(self) -> None:
         self.write_sized_pair()
@@ -816,13 +843,15 @@ class MenuTests(unittest.TestCase):
 
     def test_options_as_usual_keeps_preset_and_produce_prompt(self) -> None:
         self.write_sized_pair()
-        # mode (usual=0), options preset picker ("5-iterations" = 1 after "Skip")
+        # mode (usual=0), options preset picker ("5-iterations" = 1 after the default)
         rc, calls, text, prompt = self.run_sized(0, 1, 0, 0, 1)
         self.assertEqual(rc, 0)
-        self.assertEqual(calls[4][0], ["Skip (use env/default)", "5-iterations", "5-vu-5m"])
+        self.assertEqual(
+            calls[4][0], ["Workflow default (script options)", "5-iterations", "5-vu-5m"]
+        )
         self.assertIn('Write "orders" data for consumer?', prompt.call_args_list[0].args[0])
         [call] = self.fake_docker_calls()
-        self.assertIn("ITERATIONS=5", call)
+        self.assertRunsWithConfig(call, self.root_options_dir() / "5-iterations.json")
         self.assertNotIn("[punch] sizing", text)
 
     def test_no_presets_means_no_mode_picker(self) -> None:
@@ -841,18 +870,18 @@ class MenuTests(unittest.TestCase):
         prompt.assert_not_called()
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/producer.js", call)
-        self.assertIn("ITERATIONS=6", call)
+        self.assertSizedRun(call, 6)
         self.assertIn("[punch] orders ready (6 rows); run consumer next with 5-iterations.", text)
         self.assertNotIn("[punch] orders ready; run consumer next.", text)
 
     def test_target_picker_lists_each_sized_target(self) -> None:
         self.write_sized_pair()
         self.write_workflow(
-            "producer", forward=["BASE_URL", "VUS", "DURATION", "ITERATIONS"],
+            "producer", forward=["BASE_URL"],
             produces={"orders": ["consumer", "other"]}, sizing=self.SIZED_PRODUCER,
         )
         self.write_workflow(
-            "other", forward=["BASE_URL", "VUS", "ITERATIONS"],
+            "other", forward=["BASE_URL"],
             requires=["orders"], sizing={},
         )
         # workflows sorted: consumer, other, producer=2; target picker other=1
@@ -861,7 +890,7 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(calls[4][0], ['"orders" for consumer', '"orders" for other'])
         self.assertEqual(calls[4][1]["title"], "Size for which target?")
         [call] = self.fake_docker_calls()
-        self.assertIn("ITERATIONS=5", call)  # other: margin 0
+        self.assertSizedRun(call, 5)  # other: margin 0
         self.assertIn("[punch] orders ready (5 rows); run other next with 5-iterations.", text)
 
 

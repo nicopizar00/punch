@@ -54,9 +54,12 @@ Optional per-result keys:
 - `dataSources` (`{"<dataset>": "default" | "<path>"}`) — present when the
   workflow declares datasets it reads; each one's path relative to the working
   directory, or `"default"` when the scenario used its built-in data.
+- `config` — the k6 options JSON passed as `k6 run --config` (relative to
+  the working directory when beneath it); absent when no config was passed.
 - `sizing` — present when `--size-for` sized the run: `target`, `datasets`,
-  `shape` (the target's `ITERATIONS`/`VUS`/`DURATION` used), `preset`
-  (`null` on the CLI), `rowsNeeded`, `margin`, `producerIterations`,
+  `shape` (the target config's `executor`, `vus`, and `iterations` or
+  `duration`), `preset` (the target config's file stem, or `null` when no
+  config was given), `rowsNeeded`, `margin`, `producerIterations`,
   `producerVus`, `producedRows` (`{"<dataset>": <count>}`), and `short`
   (`true` when a sized dataset has fewer rows than `rowsNeeded`).
 

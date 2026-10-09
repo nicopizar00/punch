@@ -1,5 +1,9 @@
 # Spec — Target data sizing
 
+> **Superseded in part (2026-10-09):** the load shape is now a native k6
+> config, not `ITERATIONS`/`VUS`/`DURATION` — see
+> [`spec-native-k6-config.md`](spec-native-k6-config.md).
+
 > **Status:** Approved (rev 2 — planning fixes: `does not forward` and
 > `declares no spec.sizing` reasons, per-target picker, no mode picker
 > without presets, switch hint only after a written switched dataset)

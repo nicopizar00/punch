@@ -167,6 +167,37 @@ class LoadWorkflowTests(unittest.TestCase):
             ("/scripts/csv-fixture.js", "scripts/csv-fixture.js"),
         )
 
+    def test_k6_config_defaults_to_none(self) -> None:
+        self.assertIsNone(load_workflow(self.workflow_path).k6_config)
+
+    def test_reads_k6_config_beneath_working_directory(self) -> None:
+        (self.root / "options").mkdir()
+        (self.root / "options" / "5-iterations.json").write_text('{"iterations": 5}', encoding="utf-8")
+        self.write_workflow(self.workflow_path, (
+            "    script: /scripts/csv-fixture.js",
+            "    script: /scripts/csv-fixture.js\n    config: options/5-iterations.json",
+        ))
+        self.assertEqual(
+            load_workflow(self.workflow_path).k6_config, self.root / "options" / "5-iterations.json"
+        )
+
+    def test_rejects_invalid_k6_config(self) -> None:
+        (self.root / "list.json").write_text("[1]", encoding="utf-8")
+        (self.root / "broken.json").write_text("{", encoding="utf-8")
+        cases = {
+            "spec.k6.config escapes spec.workingDirectory": "../outside.json",
+            "spec.k6.config does not exist": "missing.json",
+            "k6 config .*list.json must be a JSON object": "list.json",
+            "could not read k6 config .*broken.json": "broken.json",
+            "spec.k6.config must be a non-empty string": '""',
+        }
+        for message, value in cases.items():
+            with self.subTest(value=value):
+                self.assertWorkflowError(message, (
+                    "    script: /scripts/csv-fixture.js",
+                    f"    script: /scripts/csv-fixture.js\n    config: {value}",
+                ))
+
     def test_allows_workflow_without_environment_or_data(self) -> None:
         workflow = load_workflow(self.minimal_path)
         self.assertEqual(workflow.forward_environment, ())

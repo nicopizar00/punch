@@ -19,12 +19,31 @@ docker compose build
 ./bin/punch run path/to/workflow.yaml
 ./bin/punch run path/to/producer.yaml --produce orders
 ./bin/punch run path/to/consumer.yaml --data orders=data/batch-2.csv
-./bin/punch run path/to/producer.yaml --size-for consumer   # size it for consumer's ITERATIONS/VUS/DURATION
+./bin/punch run path/to/workflow.yaml --config options/5-vu-5m.json   # k6 run --config
+./bin/punch run path/to/producer.yaml --size-for consumer   # size it for consumer's k6 config
 ./bin/punch menu path/to/workflows-dir   # interactively pick + run a workflow
 ```
 
 Each YAML definition in `workflows/k6/*.yaml` produces one explicit Compose
 run.
+
+The load shape is a native k6 options JSON passed with `k6 run --config`:
+
+```yaml
+spec:
+  k6:
+    script: /scripts/orders.js
+    config: options/5-iterations.json   # optional default, beneath workingDirectory
+```
+
+Punch bind-mounts the selected file read-only at `/punch/k6-config.json` and
+appends `--config /punch/k6-config.json` to the k6 command. `--config <path>`
+(or a menu preset from the `options/` directory beside the workflows
+directory) replaces `spec.k6.config` for one run; with neither, no config is
+passed. Script `options` take precedence over a config file in k6, so a
+script that should take its shape from the config must not export
+`scenarios`, `vus`, `iterations`, `duration`, or `stages`. The file must be a
+JSON object; Punch checks that before Docker.
 
 Workflows exchange data through named datasets declared in `spec.data`:
 
@@ -71,16 +90,22 @@ spec:
   equivalents: `--no-input`, `--data <dataset>=default`,
   `--data <dataset>=<path>`, or run the producer with `--produce`.
 - **Sizing for a target.** A producer that declares `spec.sizing`
-  `iterationSeconds` + `maxSeconds` and forwards `ITERATIONS` and `VUS` can
-  be sized for any `produces[].targets` workflow that declares
-  `spec.sizing`. Punch reads the target's load shape — `ITERATIONS`, or
-  `VUS` + `DURATION` with the target's `iterationSeconds`, only from names
-  the target forwards — adds the target's `margin`, and runs the producer
-  with `ITERATIONS=⌈rows × (1 + margin)⌉`, just enough `VUS` to finish
-  inside `maxSeconds`, and no `DURATION`. The menu offers
-  `Options as usual` / `Size for a target workflow` (when `options/` has
-  presets) and asks for the target's preset; `--size-for <target>` reads
-  the shape from the environment. Fewer produced rows than the target needs
+  `iterationSeconds` + `maxSeconds` can be sized for any
+  `produces[].targets` workflow that declares `spec.sizing`. Punch reads the
+  target's load shape from a k6 config — one scenario (`shared-iterations`:
+  `iterations`; `per-vu-iterations`: `vus × iterations`; `constant-vus`:
+  `vus × duration` over the target's `iterationSeconds`) or the equivalent
+  top-level `vus`/`iterations`/`duration` shortcuts — adds the target's
+  `margin`, and runs the producer with a copy of its own `spec.k6.config`
+  whose execution becomes `shared-iterations` with
+  `iterations=⌈rows × (1 + margin)⌉` and just enough `vus` to finish inside
+  `maxSeconds` (the scenario's name, `options`, `tags`, `env`, `exec`, and
+  `maxDuration` are kept). The generated file is written to
+  `reports/state/k6-config-<producer>.json` and passed as `--config`. The
+  menu offers `Options as usual` / `Size for a target workflow` (when
+  `options/` has presets) and asks for the target's preset;
+  `--size-for <target>` reads the target's shape from `--config`, else the
+  target's `spec.k6.config`. Fewer produced rows than the target needs
   prints a warning; the exit code is unchanged.
 - An optional dataset (`optional: [...]`) is used when its file has at least
   one row: Punch injects `DATA_<DATASET>_CSV` as for a required one. When the

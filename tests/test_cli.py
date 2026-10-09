@@ -538,30 +538,52 @@ class CliTests(unittest.TestCase):
         plan.assert_not_called()
 
 
-    SHAPE = "VUS, DURATION, ITERATIONS"
+    def write_config(self, name: str, config: dict) -> Path:
+        path = self.flows / f"{name}.json"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def iterations(count: int, vus: int = 1) -> dict:
+        return {"scenarios": {"default": {
+            "executor": "shared-iterations", "vus": vus, "iterations": count,
+        }}}
 
     def make_sizable(
-        self, target_sizing: str = "  sizing:\n    iterationSeconds: 2\n    margin: 0.15\n"
+        self,
+        target_sizing: str = "  sizing:\n    iterationSeconds: 2\n    margin: 0.15\n",
+        target_config: dict | None = None,
     ) -> None:
-        producer = self.producer_path.read_text(encoding="utf-8")
         self.producer_path.write_text(
-            producer.replace("forward: [BASE_URL, RUN_ID]", f"forward: [BASE_URL, RUN_ID, {self.SHAPE}]")
+            self.producer_path.read_text(encoding="utf-8")
             + "  sizing:\n    iterationSeconds: 1\n    maxSeconds: 270\n",
             encoding="utf-8",
         )
         consumer = self.consumer_path.read_text(encoding="utf-8")
-        self.consumer_path.write_text(
-            consumer.replace("forward: [BASE_URL]", f"forward: [BASE_URL, {self.SHAPE}]")
-            + target_sizing,
-            encoding="utf-8",
-        )
+        if target_config is not None:
+            self.write_config("consumer-default", target_config)
+            consumer = consumer.replace(
+                "    script: /scripts/data-consumer.js\n",
+                "    script: /scripts/data-consumer.js\n    config: consumer-default.json\n",
+            )
+        self.consumer_path.write_text(consumer + target_sizing, encoding="utf-8")
 
-    def run_size_for(self, target: str = "data-consumer", **environment: str):
+    def run_size_for(
+        self, target: str = "data-consumer", config: dict | None = None, **environment: str
+    ):
         os.environ.update({"RUN_ID": "run-1", **environment})
+        arguments = ["run", str(self.producer_path), "--size-for", target]
+        if config is not None:
+            arguments += ["--config", str(self.write_config("target-shape", config))]
         output = io.StringIO()
         with patch("sys.stdout", output), patch("sys.stderr", output):
-            rc = main(["run", str(self.producer_path), "--size-for", target])
+            rc = main(arguments)
         return rc, output.getvalue()
+
+    def sized_config(self) -> dict:
+        return json.loads(
+            (self.state_dir / "k6-config-data-producer.json").read_text(encoding="utf-8")
+        )
 
     def assertSizingStop(self, rc: int, reason: str) -> None:
         self.assertEqual(rc, 1)
@@ -570,23 +592,56 @@ class CliTests(unittest.TestCase):
         self.assertIn(reason, result["failure"])
         self.assertNotIn("sizing", result)
 
-    def test_size_for_overrides_shape_and_writes_dataset(self) -> None:
-        self.make_sizable()
-        rows = "|".join(f"[DATA carts] c{index},p,s" for index in range(5))
-        rc, text = self.run_size_for(
-            ITERATIONS="4", VUS="2", DURATION="1m", FAKE_DOCKER_STDOUT=rows
-        )
+    def test_config_flag_mounts_the_file_and_passes_it_to_k6(self) -> None:
+        config = self.write_config("five", self.iterations(5))
+        rc = main(["run", str(self.workflow_path), "--config", str(config)])
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
-        self.assertIn("ITERATIONS=5", call)
-        self.assertIn("VUS=1", call)
-        self.assertFalse(any(argument.startswith("DURATION=") for argument in call))
+        self.assertIn(f"{config.resolve()}:/punch/k6-config.json:ro", call)
+        self.assertEqual(call[-4:], ["run", "/scripts/plain-fixture.js", "--config", "/punch/k6-config.json"])
+        self.assertEqual(self.evidence()["results"][0]["config"], "flows/five.json")
+
+    def test_workflow_config_is_the_default(self) -> None:
+        config = self.write_config("default", self.iterations(5))
+        self.workflow_path.write_text(
+            PLAIN_WORKFLOW + "    config: flows/default.json\n", encoding="utf-8"
+        )
+        self.assertEqual(main(["run", str(self.workflow_path)]), 0)
+        [call] = self.fake_docker_calls()
+        self.assertIn(f"{config.resolve()}:/punch/k6-config.json:ro", call)
+        self.assertEqual(call[-2:], ["--config", "/punch/k6-config.json"])
+
+    def test_without_config_k6_gets_no_config_flag(self) -> None:
+        self.assertEqual(main(["run", str(self.workflow_path)]), 0)
+        [call] = self.fake_docker_calls()
+        self.assertNotIn("--config", call)
+        self.assertNotIn("config", self.evidence()["results"][0])
+
+    def test_unreadable_config_fails_before_docker(self) -> None:
+        broken = self.flows / "broken.json"
+        broken.write_text("[1, 2]", encoding="utf-8")
+        for path in (broken, self.flows / "missing.json"):
+            with self.subTest(path=path.name), patch("sys.stderr", io.StringIO()):
+                self.assertEqual(main(["run", str(self.workflow_path), "--config", str(path)]), 1)
+        self.assertEqual(self.compose_run_count(), 0)
+
+    def test_size_for_writes_a_sized_producer_config(self) -> None:
+        self.make_sizable()
+        rows = "|".join(f"[DATA carts] c{index},p,s" for index in range(5))
+        rc, text = self.run_size_for(config=self.iterations(4, vus=2), FAKE_DOCKER_STDOUT=rows)
+        self.assertEqual(rc, 0)
+        [call] = self.fake_docker_calls()
+        sized = self.state_dir / "k6-config-data-producer.json"
+        self.assertIn(f"{sized.resolve()}:/punch/k6-config.json:ro", call)
+        self.assertEqual(self.sized_config(), {"vus": 1, "iterations": 5})
         self.assertEqual(len(self.carts_path.read_text(encoding="utf-8").splitlines()), 6)
-        self.assertEqual(self.evidence()["results"][0]["sizing"], {
+        result = self.evidence()["results"][0]
+        self.assertEqual(result["config"], str(sized.resolve()))
+        self.assertEqual(result["sizing"], {
             "target": "data-consumer",
             "datasets": ["carts"],
-            "shape": {"ITERATIONS": "4", "VUS": "2", "DURATION": "1m"},
-            "preset": None,
+            "shape": {"executor": "shared-iterations", "vus": 2, "iterations": 4},
+            "preset": "target-shape",
             "rowsNeeded": 4,
             "margin": 0.15,
             "producerIterations": 5,
@@ -594,22 +649,37 @@ class CliTests(unittest.TestCase):
             "producedRows": {"carts": 5},
             "short": False,
         })
+        self.assertIn("[punch] sizing data-producer for data-consumer (target-shape)", text)
         self.assertIn(
-            "[punch] sizing data-producer for data-consumer (ITERATIONS=4 VUS=2 DURATION=1m)", text
+            "[punch] carts ready (5 rows); run data-consumer next with target-shape.", text
         )
+
+    def test_size_for_defaults_to_the_target_config(self) -> None:
+        self.make_sizable(target_config=self.iterations(8))
+        rc, text = self.run_size_for(FAKE_DOCKER_STDOUT="[DATA carts] c,p,s")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.sized_config(), {"vus": 1, "iterations": 10})
+        self.assertIn("[punch] sizing data-producer for data-consumer (consumer-default)", text)
+
+    def test_size_for_without_any_config_sizes_one_iteration(self) -> None:
+        self.make_sizable()
+        rc, text = self.run_size_for(FAKE_DOCKER_STDOUT="[DATA carts] c,p,s")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.sized_config(), {"vus": 1, "iterations": 2})
         self.assertIn(
-            "[punch] carts ready (5 rows); run data-consumer next with "
-            "ITERATIONS=4 VUS=2 DURATION=1m.",
+            "[punch] sizing data-producer for data-consumer "
+            "(shared-iterations vus=1 iterations=1)",
             text,
         )
 
     def test_size_for_duration_shape_and_shortfall(self) -> None:
         self.make_sizable()
-        rc, text = self.run_size_for(VUS="5", DURATION="5m", FAKE_DOCKER_STDOUT="[DATA carts] c,p,s")
+        constant = {"scenarios": {"default": {
+            "executor": "constant-vus", "vus": 5, "duration": "5m",
+        }}}
+        rc, text = self.run_size_for(config=constant, FAKE_DOCKER_STDOUT="[DATA carts] c,p,s")
         self.assertEqual(rc, 0)
-        [call] = self.fake_docker_calls()
-        self.assertIn("ITERATIONS=863", call)
-        self.assertIn("VUS=4", call)
+        self.assertEqual(self.sized_config(), {"vus": 4, "iterations": 863})
         self.assertIn("  producer VUS  : 4  (~216s of 270s budget)", text)
         self.assertIn('[punch] warning: "carts" has 1 row; data-consumer needs 750', text)
         sizing = self.evidence()["results"][0]["sizing"]
@@ -617,7 +687,7 @@ class CliTests(unittest.TestCase):
 
     def test_size_for_explicit_produce_is_not_duplicated(self) -> None:
         self.make_sizable()
-        os.environ.update({"RUN_ID": "run-1", "ITERATIONS": "1", "FAKE_DOCKER_STDOUT": "[DATA carts] c,p,s"})
+        os.environ.update({"RUN_ID": "run-1", "FAKE_DOCKER_STDOUT": "[DATA carts] c,p,s"})
         with patch("sys.stdout", io.StringIO()):
             rc = main(["run", str(self.producer_path), "--produce", "carts", "--size-for", "data-consumer"])
         self.assertEqual(rc, 0)
@@ -626,23 +696,23 @@ class CliTests(unittest.TestCase):
         )
 
     def test_size_for_non_sizable_producer_fails_before_docker(self) -> None:
-        rc, _ = self.run_size_for(ITERATIONS="5")
+        rc, _ = self.run_size_for(config=self.iterations(5))
         self.assertSizingStop(rc, "data-producer is not a sizable producer")
 
     def test_size_for_unknown_target_fails_before_docker(self) -> None:
         self.make_sizable()
-        rc, _ = self.run_size_for("nope", ITERATIONS="5")
+        rc, _ = self.run_size_for("nope", config=self.iterations(5))
         self.assertSizingStop(rc, "data-producer does not produce data for nope")
 
     def test_size_for_unsized_target_fails_before_docker(self) -> None:
         self.make_sizable(target_sizing="")
-        rc, _ = self.run_size_for(ITERATIONS="5")
+        rc, _ = self.run_size_for(config=self.iterations(5))
         self.assertSizingStop(rc, "data-consumer declares no spec.sizing")
 
     def test_size_for_non_estimable_shape_fails_before_docker(self) -> None:
         self.make_sizable()
-        rc, _ = self.run_size_for()
-        self.assertSizingStop(rc, "shape sets neither ITERATIONS nor DURATION")
+        rc, _ = self.run_size_for(config={"stages": [{"duration": "1m", "target": 5}]})
+        self.assertSizingStop(rc, "stages are not estimable")
 
     def test_size_for_is_rejected_with_all(self) -> None:
         self.assertEqual(main(["run", "all", "--size-for", "data-consumer"]), 1)
@@ -664,11 +734,9 @@ class CliTests(unittest.TestCase):
         path = self.flows / "no-data.yaml"
         path.write_text(
             PLAIN_WORKFLOW.replace("name: plain-fixture", "name: no-data")
-            + "  environment:\n    forward: [ITERATIONS, VUS]\n"
             + "  sizing:\n    iterationSeconds: 1\n    maxSeconds: 270\n",
             encoding="utf-8",
         )
-        os.environ["ITERATIONS"] = "5"
         with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
             rc = main(["run", str(path), "--size-for", "data-consumer"])
         self.assertSizingStop(rc, "no-data does not produce data for data-consumer")
@@ -677,7 +745,7 @@ class CliTests(unittest.TestCase):
         self.make_sizable()
         self.configure_fake_exit_sequence([99])
         rows = "|".join(f"[DATA carts] c{index},p,s" for index in range(6))
-        rc, _ = self.run_size_for(ITERATIONS="5", FAKE_DOCKER_STDOUT=rows)
+        rc, _ = self.run_size_for(config=self.iterations(5), FAKE_DOCKER_STDOUT=rows)
         self.assertEqual(rc, 99)
         result = self.evidence()["results"][0]
         self.assertFalse(result["datasets"][0]["published"])

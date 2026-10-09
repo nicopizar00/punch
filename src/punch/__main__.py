@@ -194,6 +194,7 @@ def _evidence_result(
     switched_from: tuple[str, ...] = (),
     data_sources: dict[str, str] | None = None,
     sizing: dict | None = None,
+    config: Path | None = None,
 ) -> dict:
     return {
         "test": workflow.name,
@@ -215,7 +216,15 @@ def _evidence_result(
         **({"switchedFrom": list(switched_from)} if switched_from else {}),
         **({"dataSources": data_sources} if data_sources else {}),
         **({"sizing": sizing} if sizing else {}),
+        **({"config": _evidence_path(workflow, config)} if config is not None else {}),
     }
+
+
+def _evidence_path(workflow, path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(workflow.working_directory))
+    except ValueError:
+        return str(path.resolve())
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -231,16 +240,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         resolve_data_args,
         validate_produce,
     )
-    from punch.workflow import WorkflowError
+    from punch.workflow import WorkflowError, read_k6_config
     from punch.sizing import (
         SizingError,
         input_warnings,
         next_hint,
-        producer_environment,
         shortfall,
         size_producer,
         sizing_evidence,
         summary_lines,
+        write_producer_config,
     )
 
     started = datetime.now(timezone.utc).isoformat()
@@ -249,8 +258,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("[punch] --produce, --data, and --size-for apply to one selected workflow, not 'all'",
               file=sys.stderr, flush=True)
         return 1
+    config_path = Path(args.config).resolve() if args.config else None
     try:
         workflows = _load_selected_workflows(args.selector)
+        if config_path is not None:
+            read_k6_config(config_path)
     except WorkflowError as error:
         print(f"[punch] {error}", file=sys.stderr, flush=True)
         return 1
@@ -327,11 +339,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     if size_for is not None and runnable:
         sized_workflow = runnable[0]
         try:
+            catalog = load_catalog(sized_workflow.source_path.parent)
+            # --config names the target's shape here; the producer runs sized.
+            target = catalog.workflows.get(size_for)
+            target_config = config_path or (target.k6_config if target is not None else None)
             sizing_plan = size_producer(
-                sized_workflow, size_for, load_catalog(sized_workflow.source_path.parent),
-                os.environ,
+                sized_workflow,
+                size_for,
+                catalog,
+                read_k6_config(target_config) if target_config is not None else {},
+                preset=target_config.stem if target_config is not None else None,
             )
-        except (CatalogError, SizingError) as error:
+        except (CatalogError, SizingError, WorkflowError) as error:
             print(f"[punch] {error}", file=sys.stderr, flush=True)
             results.append(_evidence_result(
                 sized_workflow,
@@ -385,9 +404,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 break
             continue
         choices = plan.optional_choices if plan is not None else preset
-        environment = os.environ
+        config = config_path
         if sizing_plan is not None:
-            environment = producer_environment(os.environ, sizing_plan)
+            config = write_producer_config(sizing_plan, STATE_DIR)
             for line in summary_lines(sizing_plan):
                 print(line, flush=True)
             row_counts = {
@@ -399,12 +418,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         result = execute_workflow(
             workflow,
-            environment=environment,
+            environment=os.environ,
             produce=produce,
             data_overrides=overrides,
             optional_choices=choices,
             producers_of=catalog.producers_of,
             log_path=LOGS_DIR / f"k6-{workflow.name}.log",
+            config=config,
         )
         produced = {
             dataset.dataset: dataset.record_count for dataset in result.datasets if dataset.published
@@ -415,6 +435,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             switched_from=switched_from,
             data_sources=data_sources(workflow, overrides, choices),
             sizing=sizing_evidence(sizing_plan, produced) if sizing_plan is not None else None,
+            config=config or workflow.k6_config,
         ))
         if result.passed and switched_from:
             print(switch_hint(plan, catalog), flush=True)
@@ -452,7 +473,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
     from punch.menu import run_menu
 
     workflows_dir = Path(args.workflows_dir) if args.workflows_dir else BUNDLED_WORKFLOW_DIR
-    return run_menu(workflows_dir)
+    return run_menu(workflows_dir, state_dir=STATE_DIR)
 
 
 def cmd_clean(_args: argparse.Namespace) -> int:
@@ -487,9 +508,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Read a dataset from PATH (beneath spec.data.directory), or DATASET=default for an optional dataset's built-in data.")
     run_p.add_argument("--no-input", action="store_true",
                        help="Never open the data-source or producer pickers.")
+    run_p.add_argument("--config", metavar="PATH", default=None,
+                       help="k6 options JSON passed as `k6 run --config` "
+                            "(default: the workflow's spec.k6.config).")
     run_p.add_argument("--size-for", metavar="TARGET", default=None,
-                       help="Size this producer run for TARGET: rows from TARGET's "
-                            "ITERATIONS/VUS/DURATION in the environment plus its margin; "
+                       help="Size this producer run for TARGET: rows from TARGET's k6 config "
+                            "(--config, else TARGET's spec.k6.config) plus its margin; "
                             "implies --produce for the datasets it feeds TARGET.")
 
     menu_p = sub.add_parser(

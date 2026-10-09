@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -70,6 +71,8 @@ class K6Workflow:
     summary_output: SummaryOutput | None
     description: str = ""
     sizing: Sizing | None = None
+    # `spec.k6.config`: the k6 options JSON passed as `k6 run --config` by default.
+    k6_config: Path | None = None
 
 
 ROOT_KEYS = {"apiVersion", "kind", "metadata", "spec"}
@@ -77,7 +80,7 @@ METADATA_KEYS = {"name", "description"}
 SPEC_KEYS = {"workingDirectory", "compose", "k6", "environment", "outputs", "data", "sizing"}
 SIZING_KEYS = {"iterationSeconds", "maxSeconds", "margin"}
 COMPOSE_KEYS = {"file", "service"}
-K6_KEYS = {"script"}
+K6_KEYS = {"script", "config"}
 ENVIRONMENT_KEYS = {"forward", "required"}
 OUTPUT_KEYS = {"summary"}
 DATA_KEYS = {"directory", "mountedAt", "produces", "requires", "optional"}
@@ -93,6 +96,17 @@ def _resolve_beneath(base: Path, raw: str, field: str) -> Path:
     if candidate != base and base not in candidate.parents:
         raise WorkflowError(f"{field} escapes spec.workingDirectory")
     return candidate
+
+
+def read_k6_config(path: Path) -> dict[str, Any]:
+    """A k6 options JSON file (`k6 run --config`): one JSON object."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise WorkflowError(f"could not read k6 config {path}: {error}") from error
+    if not isinstance(data, dict):
+        raise WorkflowError(f"k6 config {path} must be a JSON object")
+    return data
 
 
 def _load_yaml(text: str) -> Any:
@@ -323,6 +337,14 @@ def load_workflow(path: Path) -> K6Workflow:
     k6_script = _string(_required(k6, "script", "spec.k6"), "spec.k6.script")
     if not k6_script.startswith("/"):
         raise WorkflowError("spec.k6.script must be an absolute container path")
+    k6_config = None
+    if "config" in k6:
+        k6_config = _resolve_beneath(
+            working_directory, _string(k6["config"], "spec.k6.config"), "spec.k6.config"
+        )
+        if not k6_config.is_file():
+            raise WorkflowError("spec.k6.config does not exist")
+        read_k6_config(k6_config)
 
     environment = _allowed_keys(spec.get("environment", {}), ENVIRONMENT_KEYS, "environment")
     forward_environment = _environment_names(environment.get("forward", []), "environment.forward")
@@ -358,4 +380,5 @@ def load_workflow(path: Path) -> K6Workflow:
         summary_output=summary_output,
         description=description,
         sizing=sizing,
+        k6_config=k6_config,
     )

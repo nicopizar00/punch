@@ -35,13 +35,16 @@ from punch.sizing import (
     SizingPlan,
     input_warnings,
     next_hint,
-    producer_environment,
     shortfall,
     size_producer,
     sizing_pairs,
     summary_lines,
+    write_producer_config,
 )
-from punch.workflow import K6Workflow, WorkflowError, load_workflow
+from punch.workflow import K6Workflow, WorkflowError, load_workflow, read_k6_config
+
+# Where a sized producer's generated k6 config is written (Punch's run state).
+DEFAULT_STATE_DIR = Path(__file__).resolve().parents[2] / "reports" / "state"
 
 
 def discover_workflows(workflows_dir: Path) -> List[Path]:
@@ -222,39 +225,28 @@ def _choose_base_url(workflow: K6Workflow) -> Optional[str]:
     return current or None
 
 
-def _load_options_preset(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        print(f"[punch] could not read options preset {path.name}: {error}", file=sys.stderr)
-        return {}
-    if not isinstance(data, dict):
-        print(f"[punch] options preset {path.name} must be a JSON object; ignoring.", file=sys.stderr)
-        return {}
-    return {str(key): str(value) for key, value in data.items()}
+def _default_config_entry(workflow: K6Workflow) -> str:
+    if workflow.k6_config is None:
+        return "Workflow default (script options)"
+    return f"Workflow default ({workflow.k6_config.stem})"
 
 
-_DEFAULT_OPTIONS_PRESET = "5-iterations"
-
-
-def _choose_options(workflow: K6Workflow, options_dir: Path) -> dict:
-    extra_names = [name for name in workflow.forward_environment if name != "BASE_URL"]
-    if not extra_names:
-        return {}
+def _choose_options(workflow: K6Workflow, options_dir: Path) -> Optional[Path]:
+    """A preset to pass as `k6 run --config`; None keeps the workflow's spec.k6.config."""
     paths = discover_options(options_dir)
     if not paths:
-        return {}
-    entries = ["Skip (use env/default)"] + [path.stem for path in paths]
-    # 5 iterations is the repo-wide default load shape — environment
-    # independent (a fixed op count), unlike a DURATION-based soak whose
-    # throughput varies with how fast the target environment is. Pre-select
-    # it when available; every preset stays choosable regardless of which
-    # vars this workflow forwards.
-    default_index = entries.index(_DEFAULT_OPTIONS_PRESET) if _DEFAULT_OPTIONS_PRESET in entries else 0
-    choice = _select(entries, "Load an options preset:", cursor_index=default_index)
+        return None
+    entries = [_default_config_entry(workflow)] + [path.stem for path in paths]
+    choice = _select(entries, "Load an options preset:")
     if choice == 0:
-        return {}
-    return _load_options_preset(paths[choice - 1])
+        return None
+    path = paths[choice - 1]
+    try:
+        read_k6_config(path)
+    except WorkflowError as error:
+        print(f"[punch] {error}; using the workflow default.", file=sys.stderr)
+        return None
+    return path
 
 
 def _choose_target_preset(
@@ -265,16 +257,18 @@ def _choose_target_preset(
     for path in paths:
         try:
             plan = size_producer(
-                workflow, target, catalog, _load_options_preset(path), preset=path.stem
+                workflow, target, catalog, read_k6_config(path), preset=path.stem
             )
-        except SizingError as error:
+        except (SizingError, WorkflowError) as error:
             entries.append(f"{path.stem}  (not estimable: {error})")
             plans.append(None)
         else:
             entries.append(path.stem)
             plans.append(plan)
+    # The cursor starts on the target's own default config when it is a preset.
+    target_config = catalog.workflows[target].k6_config
     cursor = next(
-        (index for index, path in enumerate(paths) if path.stem == _DEFAULT_OPTIONS_PRESET), 0
+        (index for index, path in enumerate(paths) if path.resolve() == target_config), 0
     )
     while True:
         cursor = _select(entries, f"Load options for {target}:", cursor_index=cursor)
@@ -373,12 +367,16 @@ def _monitoring_setup() -> int:
     return 0
 
 
-def run_menu(workflows_dir: Path, options_dir: Optional[Path] = None) -> int:
+def run_menu(
+    workflows_dir: Path,
+    options_dir: Optional[Path] = None,
+    state_dir: Path = DEFAULT_STATE_DIR,
+) -> int:
     try:
         action = _choose_top_level_action()
         if action == 1:
             return _monitoring_setup()
-        return _run_workflow_menu(workflows_dir, options_dir)
+        return _run_workflow_menu(workflows_dir, options_dir, state_dir)
     except _MenuCancelled:
         print("[punch] menu canceled.")
         return 0
@@ -390,7 +388,9 @@ def run_menu(workflows_dir: Path, options_dir: Optional[Path] = None) -> int:
         return 130
 
 
-def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) -> int:
+def _run_workflow_menu(
+    workflows_dir: Path, options_dir: Optional[Path], state_dir: Path
+) -> int:
     resolved_options_dir = options_dir if options_dir is not None else workflows_dir.parent / "options"
     paths = discover_workflows(workflows_dir)
     if not paths:
@@ -420,18 +420,17 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
 
     base_url = _choose_base_url(workflow)
     sized = _choose_sizing(workflow, catalog, resolved_options_dir, choices)
-    options = _choose_options(workflow, resolved_options_dir) if sized is None else {}
+    config = _choose_options(workflow, resolved_options_dir) if sized is None else None
     produce = _choose_produce(workflow, sized)
 
     environment = dict(os.environ)
     if base_url is not None:
         environment["BASE_URL"] = base_url
-    environment.update(options)
     if sized is not None:
-        environment = producer_environment(environment, sized)
+        config = write_producer_config(sized, state_dir)
 
     command = build_compose_run_command(
-        workflow, environment, data_env=data_environment(workflow, {}, choices)
+        workflow, environment, data_env=data_environment(workflow, {}, choices), config=config
     )
     docker_run_confirmed = confirm_docker_run(
         command, assume_yes=False, stdin=sys.stdin, stdout=sys.stdout
@@ -445,6 +444,7 @@ def _run_workflow_menu(workflows_dir: Path, options_dir: Optional[Path] = None) 
         optional_choices=choices,
         producers_of=catalog.producers_of,
         docker_run_confirmed=docker_run_confirmed,
+        config=config,
     )
     rc = _report(workflow, result)
     if result.child_exit_code is not None:

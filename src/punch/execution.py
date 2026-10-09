@@ -41,13 +41,19 @@ class ExecutionResult:
     datasets: tuple[DatasetResult, ...] = ()
 
 
+# Where the selected k6 options JSON is bind-mounted for `k6 run --config`.
+K6_CONFIG_MOUNT = "/punch/k6-config.json"
+
+
 def build_compose_run_command(
     workflow: K6Workflow,
     environment: Mapping[str, str],
     *,
     container_name: str | None = None,
     data_env: Mapping[str, str] | None = None,
+    config: Path | None = None,
 ) -> list[str]:
+    """One `compose run`; `config` (default `spec.k6.config`) becomes `k6 run --config`."""
     command = [
         "docker",
         "compose",
@@ -58,12 +64,17 @@ def build_compose_run_command(
     ]
     if container_name is not None:
         command.extend(["--name", container_name])
+    config = config if config is not None else workflow.k6_config
+    if config is not None:
+        command.extend(["-v", f"{Path(config).resolve()}:{K6_CONFIG_MOUNT}:ro"])
     for name in workflow.forward_environment:
         if name in environment:
             command.extend(["-e", f"{name}={environment[name]}"])
     for name, value in (data_env or {}).items():
         command.extend(["-e", f"{name}={value}"])
     command.extend([workflow.compose_service, "run", workflow.k6_script])
+    if config is not None:
+        command.extend(["--config", K6_CONFIG_MOUNT])
     return command
 
 
@@ -474,10 +485,11 @@ def execute_workflow(
     stdout: IO[str] | None = None,
     stderr: IO[str] | None = None,
     log_path: Path | None = None,
+    config: Path | None = None,
 ) -> ExecutionResult:
     overrides = dict(data_overrides or {})
     data_env = data_environment(workflow, overrides, optional_choices)
-    command = build_compose_run_command(workflow, environment, data_env=data_env)
+    command = build_compose_run_command(workflow, environment, data_env=data_env, config=config)
 
     def fail_before_start(failure: str) -> ExecutionResult:
         return _result(workflow, command, child_exit_code=None, passed=False, failure=failure)
@@ -535,7 +547,11 @@ def execute_workflow(
 
         container_name = f"punch-{os.getpid()}-{uuid.uuid4().hex[:12]}"
         command = build_compose_run_command(
-            workflow, environment, container_name=container_name, data_env=data_env
+            workflow,
+            environment,
+            container_name=container_name,
+            data_env=data_env,
+            config=config,
         )
         try:
             proc = subprocess.Popen(
