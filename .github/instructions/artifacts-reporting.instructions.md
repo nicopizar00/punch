@@ -25,8 +25,7 @@ reporting/state code in `src/punch/`), artifact dir
 - **Stable artifact paths.** The fixed paths above are part of the public
   contract. Workflow-configured CSV is optional and excluded from that
   fixed-path count. Rename or split a fixed path = contract change — must
-  update `docs/ai/maintenance-matrix.md` and every downstream
-  consumer (CI workflow, this file, relevant skill).
+  update every downstream consumer (CI workflow, this file, docs).
 - **Low-noise terminal output by default.** Terminal show progress
   and pass/fail, not every line of every container log. Full output
   go to `reports/logs/` when `--collect-logs` set.
@@ -73,8 +72,7 @@ reporting/state code in `src/punch/`), artifact dir
 
 A change adding, splitting, or moving an artifact fills in a row here (Path /
 Format / Producer / Produced-when / Schema / Read by / Stability /
-Sensitivity, as needed) in the same PR — see
-[`maintenance-matrix.md`](../../docs/ai/maintenance-matrix.md).
+Sensitivity, as needed) in the same PR.
 
 ## Observability discipline
 

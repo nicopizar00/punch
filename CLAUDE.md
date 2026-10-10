@@ -55,7 +55,6 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │       ├── menu.py                   # `punch menu` interactive workflow picker
     │       ├── data_plan.py              # data-source + producer pickers before Docker (stdlib-only)
     │       ├── sizing.py                 # size a producer run for a target's rows (stdlib-only)
-    │       └── init_scan.py              # `punch init` bootstrap scanner / readiness mapper
     ├── dist/                             # bundled k6-ready JS (gitignored)
     ├── reports/                          # k6 output (gitignored)
     │   ├── state/                        # machine-readable state files
@@ -80,10 +79,7 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │   ├── architecture/
     │   │   ├── reference-architecture-and-implementation-guide.md
     │   │   └── punch-boundaries.md       # layered ownership map
-    │   ├── ai/                           # AI lifecycle docs
-    │   │   ├── operating-model.md
-    │   │   ├── model-selection.md
-    │   │   └── maintenance-matrix.md
+    │   ├── decisions/                    # ADRs (0001 host-npm exception, 0005 workflow YAML)
     │   └── workflows/
     │       └── validation.md
     └── .github/
@@ -106,7 +102,7 @@ Anything not listed here needs justification before being added.
    **One scoped exception:** performance-test authoring work may
    run host `npm`/`pnpm`/esbuild/lint — and host `k6` for the `npm run smoke:local`
    smoke pre-check — while *authoring* the k6 TS test toolchain
-   ([ADR 0001](docs/ai/decisions/0001-perf-engineer-host-npm.md)). This is an
+   ([ADR 0001](docs/decisions/0001-perf-engineer-host-npm.md)). This is an
    *authoring/maintenance* convenience off the evidence path; the shipped
    chain still bundles in `docker/k6.Dockerfile`, and `smoke:local` is not the
    evidence path. It does not apply to runtime-subsystem work, which stays
@@ -130,11 +126,6 @@ Preferred entry point (Python orchestrator):
 
 - `./bin/punch doctor` — confirm host prerequisites.
 - `python3 -m pip install -r requirements.txt` — install the pinned host runtime before `punch run`.
-- `./bin/punch init` — one-time, non-destructive first-wave scan that maps the
-  repo's Copilot assets + docs readiness for Punch adoption (Punch = template
-  origin; resolves a local governance key). Dry-run by default; `--write` to
-  persist the disposable bootstrap reports under `docs/ai/governance/init/`. It
-  prepares the repo for `/document`; it does **not** reconcile docs.
 - `./bin/punch run smoke` — run health smoke test; results in `reports/`.
 - `./bin/punch run gate` — run catalog performance gate.
 - `./bin/punch run journey` — run order create-read journey.
@@ -152,14 +143,9 @@ Python CLI reaches feature parity):
 
 ## For AI assistants
 
-- Read this file first, then `docs/ai/operating-model.md` and `docs/architecture/punch-boundaries.md`.
+- Read this file first, then `docs/architecture/punch-boundaries.md`.
 - **GitHub Copilot is the primary host;** `.github/copilot-instructions.md`
-  and `.github/instructions/` are the AI config. Punch ships no prompts,
-  agents, skills, or `.claude/` wraps (retired in `a568a59`).
-- The operating model is **Spec → Plan → Build → Test → Review →
-  Ship** (Spec absorbs the former Define clarify step), scaled to risk.
-  Build classifies each approved Plan task as runtime or performance-test
-  work and stays in that subsystem.
+  and `.github/instructions/` are the AI config.
 - Before adding files, dependencies, or abstractions, confirm they fit the
   execution chain and the structure above.
 - `src/services/` contains Node.js services for the reference application.

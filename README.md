@@ -193,15 +193,8 @@ GitHub Actions uploads all of these as the `performance-suite-reports` artifact.
 `failure` and `datasets`, plus the overall run outcome and
 timing. This is the evidence for the current run.
 
-## AI-assisted operating model
+## Further reading
 
-This repo uses a linear, risk-scaled lifecycle for AI-assisted changes —
-**Spec → Plan → Build → Test → Review → Ship**. It is a process: Punch ships
-always-on and path-scoped Copilot instructions, no prompts, agents, or skills.
-
-- Operating model: [`docs/ai/operating-model.md`](docs/ai/operating-model.md)
-- Model selection: [`docs/ai/model-selection.md`](docs/ai/model-selection.md)
-- Change cascade: [`docs/ai/maintenance-matrix.md`](docs/ai/maintenance-matrix.md)
 - Layered architecture: [`docs/architecture/punch-boundaries.md`](docs/architecture/punch-boundaries.md)
 - Validation contract: [`docs/workflows/validation.md`](docs/workflows/validation.md)
 - Contribution rules: [`CLAUDE.md`](CLAUDE.md)

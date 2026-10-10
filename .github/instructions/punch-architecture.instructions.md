@@ -35,7 +35,7 @@ Scope: **every file**. Always-on architectural contract. Visual layer map: see [
 3. compose service rename without dependents grep.
 4. subprocess call from Python running k6 directly (skipping compose).
 5. Build touching Python + compose + k6 in one diff without Plan that authorized integration.
-6. reporting file path or schema change without maintenance-matrix update.
+6. reporting file path or schema change without updating its consumers.
 
 ## When this file activates
 

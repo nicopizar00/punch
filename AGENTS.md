@@ -49,22 +49,10 @@ Key Patterns and Conventions
 - A dataset is written only when the run opts in with `--produce <dataset>`; interactive prompts are limited to that opt-in, the data-source picker (optional datasets) and producer picker (missing data) shown before Docker on a TTY — still one Compose run, skipped with `--no-input` — and the consumed-data delete prompt
 - Keep the execution chain: TypeScript -> esbuild (in Docker) -> k6 image -> run -> reports
 
-AI Operating Model
-
-Punch uses a six-phase lifecycle for AI-assisted changes:
-
-    Spec → Plan → Build → Test → Review → Ship
-
-Spec absorbs the former Define phase (it opens with a clarify/refine step). Build classifies each approved Plan task as runtime or performance-test work and stays in that subsystem. Punch ships no prompts, agent personas, or skills — they were retired in `a568a59`; the lifecycle is a process, described in docs/ai/operating-model.md.
-
 Rules for AI assistants
 
-- Broad read before narrow write. Spec/Plan read widely; Build edits narrowly.
-- No Build without Plan. Every Build step must reference an approved Plan task ID with allowed/read-only/forbidden paths.
-- No scope expansion inside Build. If a Build needs to touch a file outside the task's allowed paths, stop and return to Plan.
 - Verify through Punch official commands. ./bin/punch doctor and ./bin/punch run <test> are the verification contract — not host-side docker or k6.
-- Review before Ship. Ship is mechanical only (git/gh); it never introduces new logic.
-- Humans merge. Ship opens the PR; humans approve and merge.
+- Humans merge. Open the PR; humans approve and merge.
 
 Adding a new test
 
@@ -81,6 +69,5 @@ Common Pitfalls
 For deeper reading
 
 - CLAUDE.md — project rules and architectural constitution
+- docs/architecture/reference-architecture-and-implementation-guide.md — solution, decisions, reproduction
 - docs/architecture/punch-boundaries.md — layered ownership map
-- docs/ai/operating-model.md — the lifecycle and asset taxonomy
-- docs/ai/model-selection.md — which model class for which phase

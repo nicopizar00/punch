@@ -40,4 +40,3 @@ Bundled workflows declare no data.
 
 ## Contact
 
-For questions about the AI lifecycle, see [`docs/ai/operating-model.md`](docs/ai/operating-model.md).

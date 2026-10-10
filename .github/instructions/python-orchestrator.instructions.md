@@ -43,8 +43,8 @@ Scope: `bin/punch` and all under `src/punch/`.
   per-dataset produce opt-in (menu) and the consumed-data delete prompt;
   non-interactive runs opt in with `--produce` and never delete. Bundled
   workflows declare no data. No other TTY assumption or terminal-colour gating.
-- **No new subcommands without Plan.** Adding command = lifecycle
-  change; no inline parser extend during Build.
+- **No new subcommands without a plan.** Adding a command changes the
+  public CLI.
 
 ## Tests
 

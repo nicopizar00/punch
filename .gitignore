@@ -9,11 +9,9 @@ graphify-out-*/*
 **/graphify-out-*/*
 graphify-out_*/*
 **/graphify-out_*/*
-# Allowlist: committed shared artifacts only (validated, no local paths — ADR 0002)
+# Allowlist: committed shared artifacts only (no local paths)
 !graphify-out/graph.json
 !graphify-out/GRAPH_REPORT.md
-# `punch init` first-wave bootstrap output — disposable; regenerate any time.
-docs/ai/governance/init/
 node_modules/
 __pycache__/
 *.pyc

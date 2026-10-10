@@ -480,13 +480,6 @@ def cmd_clean(_args: argparse.Namespace) -> int:
     return _stream(["docker", "compose", "down", "--volumes", "--remove-orphans"])
 
 
-def cmd_init(args: argparse.Namespace) -> int:
-    # Lazy import: the scanner is only needed for this command and keeps the
-    # hot path (doctor/run/clean) free of the extra module.
-    from punch import init_scan
-    return init_scan.run(args)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="punch",
@@ -528,23 +521,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("clean", help="Tear down compose stack and volumes.")
 
-    init_p = sub.add_parser(
-        "init",
-        help="First-wave bootstrap scan: map Copilot assets + docs readiness for Punch adoption.",
-    )
-    init_p.add_argument("--dry-run", action="store_true",
-                        help="Compute and print the scan; write nothing (default behavior).")
-    init_p.add_argument("--write", action="store_true",
-                        help="Persist the generated bootstrap artifacts to the output dir.")
-    init_p.add_argument("--with-graphify", action="store_true",
-                        help="Explicit opt-in marker for the lightweight Graphify "
-                             "availability check. Init always records Graphify "
-                             "file-readiness and never shells out to the CLI "
-                             "(dependency-free); this flag only annotates that the "
-                             "check was requested. Never required.")
-    init_p.add_argument("--output", metavar="DIR", default=None,
-                        help="Output dir for generated artifacts (default: docs/ai/governance/init).")
-
     return parser
 
 
@@ -556,7 +532,6 @@ def main(argv: list[str] | None = None) -> int:
         "run": cmd_run,
         "menu": cmd_menu,
         "clean": cmd_clean,
-        "init": cmd_init,
     }
     return dispatch[args.command](args)
 

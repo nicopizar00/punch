@@ -81,8 +81,7 @@ workload definitions.
 
 ## Common anti-patterns
 
-The six-phase lifecycle (Spec → Plan → Build → Test → Review → Ship — Spec
-absorbs the former Define step) is designed to catch these before merge.
+Review catches these before merge.
 
 1. **k6 owning orchestration.** A test file that starts containers, polls
    compose state, or writes outside `/reports/`. k6 must remain a pure load
@@ -105,8 +104,7 @@ absorbs the former Define step) is designed to catch these before merge.
 6. **Reporting paths changing without a contract update.** Renaming
    `reports/state/punch-run.json` or splitting it into multiple files breaks
    the CI validation job and any downstream consumer. Fix: treat as a
-   contract change — Plan must call out the cascade
-   (`docs/ai/maintenance-matrix.md`).
+   contract change — the plan must call out every consumer.
 7. **Treating stderr as dataset data.** Only workflow-declared `[DATA <dataset>]` records on
    stdout are harvested. Fix: preserve separate streams in
    `src/punch/execution.py`; require confirmation and publish CSV atomically
@@ -114,8 +112,7 @@ absorbs the former Define step) is designed to catch these before merge.
 
 ## When to consult this file
 
-- Spec phase: confirm the requested change names a single owning layer.
-- Plan phase: every allowed/forbidden path in the plan should map to a layer
-  here.
-- Review phase: any diff that touches more than one layer must reference the
-  Plan that authorized the crossing.
+- A requested change should name a single owning layer.
+- Every path a change touches should map to a layer here.
+- A diff that touches more than one layer must say why the crossing is
+  needed.

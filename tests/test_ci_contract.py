@@ -56,7 +56,7 @@ class CiContractTests(unittest.TestCase):
                 self.assertNotIn("no pip dependencies", content)
 
     def test_adr_0001_marks_its_old_runtime_assumption_as_superseded(self) -> None:
-        content = (REPOSITORY / "docs/ai/decisions/0001-perf-engineer-host-npm.md").read_text(encoding="utf-8")
+        content = (REPOSITORY / "docs/decisions/0001-perf-engineer-host-npm.md").read_text(encoding="utf-8")
 
         self.assertIn("Superseded in part by ADR 0005", content)
         self.assertIn("stdlib/no-host-pip assumption", content)
@@ -65,7 +65,6 @@ class CiContractTests(unittest.TestCase):
         for relative_path in [
             ".github/instructions/punch-architecture.instructions.md",
             "docs/architecture/punch-boundaries.md",
-            "docs/ai/operating-model.md",
         ]:
             with self.subTest(path=relative_path):
                 content = (REPOSITORY / relative_path).read_text(encoding="utf-8")

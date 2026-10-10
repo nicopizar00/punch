@@ -10,7 +10,7 @@ Scope: `docker-compose.yml` and all under `docker/`. Compose own runtime boundar
 
 - **Services are contracts.** Service names, image names, exposed ports,
   env vars, `depends_on`, healthchecks, volume mounts = public surface. Rename any
-  cascade to k6 tests, orchestrator, CI, docs (see [`docs/ai/maintenance-matrix.md`](../../docs/ai/maintenance-matrix.md)).
+  cascade to k6 tests, orchestrator, CI, docs.
 - **Do not mutate service names casually.** Rename = own Plan with
   dependents grep + update across `src/tests/`, `src/punch/`,
   `.github/workflows/`, docs.
@@ -72,8 +72,7 @@ services:
       - punch-net
 ```
 
-**Contract changes** (need a Plan + dependents cascade, see
-[`maintenance-matrix.md`](../../docs/ai/maintenance-matrix.md)): renaming a
+**Contract changes** (need a plan + dependents cascade): renaming a
 service, changing a host-exposed port, removing/weakening a healthcheck,
 adding a writable volume, a major-version image bump, removing/renaming an
 env var another service or `src/tests/` reads.
