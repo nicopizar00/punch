@@ -6,8 +6,7 @@
 // execution without a Shape plan.
 //
 // See:
-//   - .github/instructions/k6-browser.instructions.md  (why deferred)
-//   - .github/skills/punch-performance-k6/SKILL.md     (when to revisit)
+//   - .github/instructions/k6-performance.instructions.md  ("Browser test rules": why deferred)
 //
 // To revive this test, a Shape plan must:
 //   1. Justify the cost: a real UI to validate.

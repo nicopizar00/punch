@@ -12,7 +12,7 @@ Describe the change and why it is needed.
 Per the [evidence matrix](../docs/workflows/validation.md):
 
 - **Runtime-affecting change** — install the pinned PyYAML runtime with `python3 -m pip install -r requirements.txt`, then run `./bin/punch run smoke`. Files to check: reports/* and reports/state/punch-run.json (`passed: true` gates the change).
-- **Documentation/Copilot-only change** — no runtime run expected; verify via diff review + a clean `punch-ai-governance` pass.
+- **Documentation/Copilot-only change** — no runtime run expected; verify via diff review.
 
 ## Checklist
 

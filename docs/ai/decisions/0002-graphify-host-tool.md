@@ -31,7 +31,7 @@ Pristine upstream snapshot (v0.8.41) may live in `.ai-upstream/graphify/` with p
 Graphify adopted as **scoped host-tool exception** to Docker First, used **only** by documentation-reconciliation workflow. Exception, not repeal:
 
 - **Reuse, don't fork.** Punch invokes existing `/graphify` skill, consumes its **native outputs** (`graphify-out/graph.json`, `GRAPH_REPORT.md`). No custom AST/indexing skill created.
-- **One governed workflow.** `/punch-document` prompt drives existing [`punch-ai-governance`](../../../.github/agents/punch-ai-governance.agent.md) agent, which reconciles docs in **waves** (keep / merge / rewrite / archive / delete / promote). Graphify gives map; `punch-ai-governance` makes every decision.
+- **One governed workflow.** `/punch-document` prompt drives existing `punch-ai-governance` agent (retired in `a568a59`), which reconciles docs in **waves** (keep / merge / rewrite / archive / delete / promote). Graphify gives map; `punch-ai-governance` makes every decision.
 - **Inline skill-body execution.** `punch-ai-governance` loads `/graphify`'s skill file directly and executes its Steps 1-9 procedure in its own turn — a skill is an instructions file to read and follow, not a command to dispatch or fork. It forks only the skill's own Step 3 Part B2 chunk-extraction subagents, kept **1-deep** (`chat.subagents.allowInvocationsFromSubagents` stays default — subagents cannot spawn subagents). *(Corrected 2026-07-16 — see "Inline skill-body execution adopted" below. The original claim here, that the agent "forks `/graphify` as single subagent" via a `runSubagent` tool, was never actually wireable: `punch-ai-governance.agent.md` has no `agents:` allowlist field, and `/graphify` is a skill file, not an `.agent.md` persona that could be listed in one.)*
 - **Guard reworded, not removed.** `punch-ai-governance` still **never runs Punch Docker/k6 runtime or `bin/punch` suite**. Only command surface = executing `/graphify`'s skill body inline.
 - **Outputs evidence, not canonical.** Everything under `graphify-out/` = audit **evidence** — never canonical docs. `CLAUDE.md`, `docs/`, registries stay authoritative; nothing promoted to canonical without governance decision. `graph.json` and `GRAPH_REPORT.md` may be committed as shared team artifacts after passing the leakage validation checklist (see **Team Sharing** below); all other `graphify-out/` contents remain gitignored.
@@ -311,7 +311,7 @@ ADR's original Context (2026-06-18) and first Consequences section above
 predates the pin decision and is left as written — historical record, not
 current guidance. `punch-graphify/SKILL.md` no longer exists (retired, see
 "Native Graphify skill supersedes the Punch-leaned adaptation" below);
-consult [`docs/ai/graphify-install.md`](../graphify-install.md) for the live
+consult `docs/ai/graphify-install.md` (since retired) for the live
 pin instead.
 
 ## Native Graphify skill supersedes the Punch-leaned adaptation (2026-07-17)
@@ -398,6 +398,6 @@ verified against the GitHub API), replacing the prior `0.8.41` pin —
 `SKILL.md` plus all `references/**`, source-identical to the upstream VS Code
 variant except the two approved frontmatter fields. Current install guidance
 and the live version pin are documented in
-[`docs/ai/graphify-install.md`](../graphify-install.md), not here — this ADR
+`docs/ai/graphify-install.md` (since retired), not here — this ADR
 records only the tooling decision, not the live version number. No behavior,
 scope, or governance change accompanies this refresh.

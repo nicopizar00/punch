@@ -61,7 +61,3 @@ declared columns and collected in order; console summaries never control
 execution. Each dataset is written to a temporary sibling and atomically
 published only after a zero exit code and at least one valid record. Sequential execution is
 the contract; parallel runs require a Plan.
-
-## Build prompt
-
-Use [`punch-build`](../prompts/punch-build.prompt.md) — `punch-builder` classifies orchestrator tasks into its runtime subsystem.

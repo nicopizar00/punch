@@ -195,20 +195,13 @@ timing. This is the evidence for the current run.
 
 ## AI-assisted operating model
 
-This repo uses a linear lifecycle for AI-assisted changes — **Spec →
-Plan → Build → Test → Review → Ship** — plus one orthogonal maintenance
-prompt, **punch-document**, for recurring documentation reconciliation. Each lifecycle
-phase has one prompt; Build is a single `punch-build` prompt whose
-`punch-builder` dispatcher routes to one of two domain engineers. Domain +
-lifecycle skills and the agent personas support the lifecycle — see the
-registries below for the live inventory.
+This repo uses a linear, risk-scaled lifecycle for AI-assisted changes —
+**Spec → Plan → Build → Test → Review → Ship**. It is a process: Punch ships
+always-on and path-scoped Copilot instructions, no prompts, agents, or skills.
 
 - Operating model: [`docs/ai/operating-model.md`](docs/ai/operating-model.md)
-- Scoped-build policy: [`docs/ai/scoped-build-policy.md`](docs/ai/scoped-build-policy.md)
 - Model selection: [`docs/ai/model-selection.md`](docs/ai/model-selection.md)
-- Mode mapping: [`docs/ai/copilot-mode-mapping.md`](docs/ai/copilot-mode-mapping.md)
-- Skill registry: [`docs/ai/skill-registry.md`](docs/ai/skill-registry.md)
-- Prompt registry: [`docs/ai/prompt-registry.md`](docs/ai/prompt-registry.md)
+- Change cascade: [`docs/ai/maintenance-matrix.md`](docs/ai/maintenance-matrix.md)
 - Layered architecture: [`docs/architecture/punch-boundaries.md`](docs/architecture/punch-boundaries.md)
 - Validation contract: [`docs/workflows/validation.md`](docs/workflows/validation.md)
 - Contribution rules: [`CLAUDE.md`](CLAUDE.md)

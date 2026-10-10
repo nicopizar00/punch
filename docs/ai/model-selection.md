@@ -67,7 +67,7 @@ Budget that follow this distribution give most reliable outcomes. Inverting it (
 Small Python orchestrator task:
 
 - Spec / Plan / Review: strong reasoning model.
-- Build (one `punch-build` call → `punch-builder`, runtime subsystem): strong coding model.
+- Build (runtime subsystem): strong coding model.
 - Verify (`./bin/punch doctor`, `./bin/punch run smoke`, read JSON):
   fast model.
 - Ship (commit, push, PR): fast model.

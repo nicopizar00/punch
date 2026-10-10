@@ -1,9 +1,8 @@
 # Lifecycle artifact templates 🧩
 
 Blank, schema-faithful skeletons for each Punch lifecycle phase. Copy one, fill,
-save to canonical location. Each template mirror **Expected output** section of
-matching prompt in `.github/prompts/` — **prompt is source of truth; these
-convenience scaffolds** (no rule restated, only output shape).
+save to canonical location. The phase rules live in [`../../operating-model.md`](../../operating-model.md);
+these are convenience scaffolds (no rule restated, only output shape).
 
 | Phase | Template | Canonical save location | Caveman |
 |---|---|---|---|
@@ -21,5 +20,4 @@ convenience scaffolds** (no rule restated, only output shape).
 - Caveman: persisted artifacts use `lite`/`full`, **never Wenyan**; emojis/ASCII
   emoticons allowed in docs (the `/punch-document` carve-out).
 - **Provenance.** Lifecycle shapes are **adapted** (not hard-forked) from upstream
-  [agent-skills](https://github.com/addyosmani/agent-skills) to fit Punch; the
-  `.github/prompts/` files remain the behavior source of truth.
+  [agent-skills](https://github.com/addyosmani/agent-skills) to fit Punch.

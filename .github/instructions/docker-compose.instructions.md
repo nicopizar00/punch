@@ -81,7 +81,3 @@ env var another service or `src/tests/` reads.
 **Within contract** (normal Build, no separate Plan beyond it): patch-level
 image bumps, tightening a healthcheck interval/timeout, adding an env var
 with a backwards-compatible default.
-
-## Build prompt
-
-Use [`punch-build`](../prompts/punch-build.prompt.md) — `punch-builder` classifies Compose tasks into its runtime subsystem.

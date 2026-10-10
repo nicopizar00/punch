@@ -26,7 +26,7 @@ Scope: **every file**. Always-on architectural contract. Visual layer map: see [
 - **k6 owns test behavior only.** k6 no start containers, no poll state, no write outside `/reports/`.
 - **Bash thin wrapper.** bin script that branches on output or computes pass/fail belongs in Python.
 - **Reporting product contract.** Artifact paths (`reports/state/punch-run.json`, HTML reports, JSON summaries, `reports/logs/`) stable. Renames or schema changes need Plan naming every consumer.
-- **CI/CD external.** `.github/workflows/` consumes Punch; Punch no extend own ownership into CI. Workflow edits out of scope for Build prompts unless Plan explicitly authorizes.
+- **CI/CD external.** `.github/workflows/` consumes Punch; Punch no extend own ownership into CI. Workflow edits out of scope for Build unless Plan explicitly authorizes.
 
 ## Anti-patterns to flag in Review
 

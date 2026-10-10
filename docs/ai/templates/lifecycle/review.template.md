@@ -1,8 +1,7 @@
 # Review — <topic>
 
-> **Template.** Read-only critique of diff against Plan. Pattern source:
-> `.github/prompts/punch-review.prompt.md` (Caveman `full`; lead normal prose
-> for risk/architecture judgment; evidence verbatim).
+> **Template.** Read-only critique of diff against Plan. Caveman `full`;
+> lead normal prose for risk/architecture judgment; evidence verbatim.
 
 - **Verdict** — Approve | Request Changes
 - **Files changed** — <list>

@@ -1,6 +1,10 @@
 # ADR 0004 — Claude Code `guard` bridge reuses the GitHub-Copilot-First config
 
-**Status:** Accepted (2026-06-18)
+**Status:** Superseded (2026-10-10) — the `guard` skill, `.claude/commands/*`
+wraps, and the `.github/` prompts/agents/skills they reused were retired in
+`a568a59`. Kept as a historical record.
+
+_Originally accepted 2026-06-18._
 **Deciders:** repository owner + Punch AI Governance
 
 ## Context

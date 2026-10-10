@@ -1,7 +1,7 @@
 # Ship — <topic>
 
-> **Template.** Ship-readiness summary. Pattern source:
-> `.github/prompts/punch-ship.prompt.md` (Caveman `full`). **Mechanical only**
+> **Template.** Ship-readiness summary. Caveman `full`.
+> **Mechanical only**
 > (git/gh) — Ship never merge, tag, or push `main`; human approve merge.
 
 ```

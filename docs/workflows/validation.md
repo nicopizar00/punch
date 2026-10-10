@@ -12,7 +12,7 @@ point back to instead of each re-asserting "evidence mandatory."
 | Change class | Touches | Build? | Required evidence |
 |---|---|---|---|
 | **Runtime-affecting** | `src/**`, `docker/**`, `docker-compose.yml`, `bin/**`, `.github/workflows/**`, or anything with a runtime/artifact contract | Yes | `./bin/punch run <test>` → `reports/state/punch-run.json` (`passed: true`) |
-| **Documentation / Copilot-only** | `README.md`, `docs/**`, `.github/instructions/**`, `.github/prompts/**`, `.github/skills/**`, `.github/agents/**`, `copilot-instructions.md` — no runtime-contract impact | No (straight Plan → PR, per [`documentation.instructions.md`](../../.github/instructions/documentation.instructions.md#build-prompt)) | Diff review + frontmatter/registry parity (`punch-ai-governance` clean) + local link check. No `reports/state/punch-run.json` — none was produced, and none is expected. |
+| **Documentation / Copilot-only** | `README.md`, `docs/**`, `.github/instructions/**`, `copilot-instructions.md` — no runtime-contract impact | No (straight Plan → PR, per [`documentation.instructions.md`](../../.github/instructions/documentation.instructions.md#build-step)) | Diff review + local link check. No `reports/state/punch-run.json` — none was produced, and none is expected. |
 
 A change that mixes both classes (e.g. a doc update that also changes a
 runtime contract) is Runtime-affecting for evidence purposes.
@@ -137,14 +137,11 @@ artifact is missing, the orchestrator violated the "evidence first" rule.
 ```bash
 ls .github/copilot-instructions.md
 ls .github/instructions/*.instructions.md
-ls .github/prompts/*.prompt.md
-ls .github/skills/*/SKILL.md
 ```
 
-Then invoke the Review phase (`punch-review` prompt), which activates
-the `punch-ai-governance` agent when `.github/` or `docs/ai/` is
-touched. Its expected output is a findings list ending with "Governance
-is clean".
+Then run the Review phase against
+[`docs/ai/operating-model.md`](../ai/operating-model.md): diff review plus a
+local link check over `.github/` and `docs/`.
 
 ## How CI re-validates
 

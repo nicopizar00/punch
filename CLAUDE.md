@@ -78,23 +78,17 @@ If a proposed change does not fit this chain, stop and discuss before adding it.
     │   └── clean
     ├── docs/
     │   ├── architecture/
+    │   │   ├── reference-architecture-and-implementation-guide.md
     │   │   └── punch-boundaries.md       # layered ownership map
     │   ├── ai/                           # AI lifecycle docs
     │   │   ├── operating-model.md
-    │   │   ├── scoped-build-policy.md
     │   │   ├── model-selection.md
-    │   │   ├── copilot-mode-mapping.md
-    │   │   ├── maintenance-matrix.md
-    │   │   ├── skill-registry.md
-    │   │   └── prompt-registry.md
+    │   │   └── maintenance-matrix.md
     │   └── workflows/
     │       └── validation.md
     └── .github/
         ├── copilot-instructions.md       # always-on global Copilot rules
         ├── instructions/                 # path-specific behavior rules
-        ├── prompts/                      # 8 lifecycle prompts (Spec→Ship + punch-test + punch-document)
-        ├── skills/                       # domain + lifecycle skills (docs/ai/skill-registry.md)
-        ├── agents/                       # agent personas (lifecycle + punch-builder implementer + specialists)
         └── workflows/
             └── k6.yml
 
@@ -109,15 +103,14 @@ Anything not listed here needs justification before being added.
    implementation details, not user-facing commands. The Python orchestrator
    is a thin façade that shells out to `docker compose`; it adds no execution
    semantics of its own.
-   **One scoped exception:** `punch-builder`'s performance-test subsystem may
+   **One scoped exception:** performance-test authoring work may
    run host `npm`/`pnpm`/esbuild/lint — and host `k6` for the `npm run smoke:local`
    smoke pre-check — while *authoring* the k6 TS test toolchain
    ([ADR 0001](docs/ai/decisions/0001-perf-engineer-host-npm.md)). This is an
    *authoring/maintenance* convenience off the evidence path; the shipped
    chain still bundles in `docker/k6.Dockerfile`, and `smoke:local` is not the
-   evidence path. It does not apply while `punch-builder` is working the
-   runtime subsystem, which stays Docker-first with its explicitly installed
-   Python runtime.
+   evidence path. It does not apply to runtime-subsystem work, which stays
+   Docker-first with its explicitly installed Python runtime.
 2. **Small, reviewable steps.** Each change must be understandable in one
    sitting. Prefer multiple small PRs over one large one.
 3. **No unnecessary dependencies.** Every dependency must earn its place. If
@@ -160,20 +153,13 @@ Python CLI reaches feature parity):
 ## For AI assistants
 
 - Read this file first, then `docs/ai/operating-model.md` and `docs/architecture/punch-boundaries.md`.
-- **GitHub Copilot is the primary host;** `.github/` is the single source of
-  truth for AI config. In **Claude Code**, activate the `guard` skill
-  (`.claude/skills/guard/SKILL.md`) — it reuses the `.github/` prompts/agents/
-  skills via the `.claude/commands/*` wraps (`/spec … /document`); it never
-  forks or overrides them ([ADR 0004](docs/ai/decisions/0004-claude-code-guard-bridge.md)).
+- **GitHub Copilot is the primary host;** `.github/copilot-instructions.md`
+  and `.github/instructions/` are the AI config. Punch ships no prompts,
+  agents, skills, or `.claude/` wraps (retired in `a568a59`).
 - The operating model is **Spec → Plan → Build → Test → Review →
-  Ship** (Spec absorbs the former Define clarify step). Use the matching
-  prompt in `.github/prompts/` and stay in the declared mode (Ask vs
-  Agent). Build is a single `punch-build` prompt; `punch-builder` classifies
-  the approved task into a subsystem (runtime or performance-test) and
-  implements it directly — see
-  `docs/ai/scoped-build-policy.md`. Each phase activates a lifecycle
-  method skill + relevant domain skill/path instructions; the *which skill
-  when* index is in `docs/ai/skill-registry.md`.
+  Ship** (Spec absorbs the former Define clarify step), scaled to risk.
+  Build classifies each approved Plan task as runtime or performance-test
+  work and stays in that subsystem.
 - Before adding files, dependencies, or abstractions, confirm they fit the
   execution chain and the structure above.
 - `src/services/` contains Node.js services for the reference application.

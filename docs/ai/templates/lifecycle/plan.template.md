@@ -1,7 +1,6 @@
 # Plan — <topic>
 
-> **Template.** Copy to `docs/architecture/specs/plan-<topic>.md`.
-> Pattern source: `.github/prompts/punch-plan.prompt.md` (Caveman `full`).
+> **Template.** Copy to `docs/architecture/specs/plan-<topic>.md`. Caveman `full`.
 
 - **Goal** (from Spec): <one sentence>
 

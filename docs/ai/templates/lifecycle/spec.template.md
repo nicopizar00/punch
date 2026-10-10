@@ -1,7 +1,6 @@
 # Spec — <topic>
 
-> **Template.** Copy to `docs/architecture/specs/<topic>.md`, fill in.
-> Pattern source: `.github/prompts/punch-spec.prompt.md` (Caveman `lite`).
+> **Template.** Copy to `docs/architecture/specs/<topic>.md`, fill in. Caveman `lite`.
 
 - **Goal** — <one concrete, testable sentence>
 - **Non-goals** — <what work explicitly will NOT do>

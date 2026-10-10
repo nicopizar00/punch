@@ -1,9 +1,7 @@
 # Build — <task ID>
 
-> **Template.** Build report (`punch-builder` evidence contract).
-> Pattern source: `.github/prompts/punch-build.prompt.md` (Caveman `ultra`;
-> engineers `wenyan-lite`;
-> **evidence never compressed**).
+> **Template.** Build report (Build evidence contract).
+> **Evidence never compressed.**
 
 - **Result** — <what done; or "verification-only task — no product code change">
 - **Changed Files** — <paths, or "none">

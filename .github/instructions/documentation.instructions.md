@@ -13,15 +13,12 @@ Scope: `README.md`, everything under `docs/`.
 - **The always-on rules live in `.github/copilot-instructions.md`.** A doc change
   that moves a rule needs a Plan + one-line note in `docs/ai/operating-model.md`.
 - **No duplication.**
-  - Architecture: `docs/architecture.md` (folder map + execution chain) +
-    `docs/architecture/punch-boundaries.md` (ownership layers).
-  - Lifecycle walkthrough: `docs/ai/workflow.md`.
-  - Operating model: `docs/ai/operating-model.md`.
-  - Scoped build policy: `docs/ai/scoped-build-policy.md`.
+  - Architecture: `docs/architecture/reference-architecture-and-implementation-guide.md`
+    (solution, decisions, reproduction) + `docs/architecture/punch-boundaries.md`
+    (ownership layers).
+  - Operating model and lifecycle: `docs/ai/operating-model.md`.
   - Model selection guidance: `docs/ai/model-selection.md`.
-  - AI mode mapping: `docs/ai/copilot-mode-mapping.md`.
-  - Skill catalogue: `docs/ai/skill-registry.md`.
-  - Prompt catalogue: `docs/ai/prompt-registry.md`.
+  - Change cascade: `docs/ai/maintenance-matrix.md`.
   If you'd repeat content, link instead.
 - **AI-friendly structure.** Tables for catalogs, headings for navigation,
   explicit file paths so LLM resolve references without guessing.
@@ -33,13 +30,10 @@ Scope: `README.md`, everything under `docs/`.
 
 - Place under right subtree (`architecture/`, `ai/`, `workflows/`,
   `validation/`).
-- Add one line to relevant registry (skill, prompt) or `README.md` pointer
-  section.
+- Add one line to the `README.md` pointer section.
 - Delete or merge replaced doc in same change.
 
-## Build prompt
+## Build step
 
-Doc-only changes typically use [`punch-build`](../prompts/punch-build.prompt.md)
-(`punch-builder`'s runtime subsystem) when they change artifact contract.
-Otherwise no Build prompt needed — doc edit go straight Plan to PR if no runtime
-behavior change.
+Doc-only changes that alter the artifact contract go through a runtime Build
+step. Otherwise doc edits go straight Plan → PR.

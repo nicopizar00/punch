@@ -110,7 +110,3 @@ service use case is approved. The transferable discipline that *is* in scope:
 **Red flags:** a service path with retries/queries/external hops and zero new
 log events; log lines built by string interpolation; no correlation id;
 latency reported as an average; secrets/full bodies/PII in any log line.
-
-## Build prompt
-
-Use [`punch-build`](../prompts/punch-build.prompt.md) — `punch-builder` classifies data-harvest tasks into its runtime subsystem.

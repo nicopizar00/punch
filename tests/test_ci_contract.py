@@ -46,7 +46,6 @@ class CiContractTests(unittest.TestCase):
             "src/punch/__main__.py",
             ".github/instructions/docker-compose.instructions.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
-            ".github/prompts/punch-spec.prompt.md",
         ]
 
         for relative_path in paths:
