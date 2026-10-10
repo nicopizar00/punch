@@ -1,34 +1,25 @@
 # Punch — Reference Architecture and Implementation Guide
 
-This guide explains Punch as a reusable performance-workflow orchestrator and
-shows how to reproduce its core behavior independently in a restricted
-enterprise environment. It is descriptive, not a requirement to import Punch or
-copy this repository. The implementation and contract tests linked at the end
-remain the source of truth.
+What Punch is, why it is built this way, and how to reproduce its core in a
+restricted environment without importing Punch. Source and tests (end of page)
+stay authoritative. Layer ownership: [punch-boundaries.md](punch-boundaries.md).
+Evidence contract: [validation.md](../workflows/validation.md).
 
-Use [Punch — Architectural Boundaries](punch-boundaries.md) for layer ownership
-and [Workflow Validation](../workflows/validation.md) for the current evidence
-contract.
+## 1. Solution
 
-## Purpose and scope
-
-Punch turns declarative workflow files into one controlled Docker Compose run. It
-adds the policy that Compose and k6 intentionally do not own:
+Punch turns one declarative workflow file into one controlled Docker Compose
+run of k6. It owns the policy Compose and k6 do not:
 
 - strict workflow and native k6-config loading;
-- catalog-wide validation of dataset producers and consumers;
-- interactive or non-interactive data-source planning;
-- independent selection of a workflow and its load options;
-- producer sizing from a downstream workflow's expected demand;
-- allow-listed environment forwarding and deterministic command construction;
-- separate stdout/stderr handling, atomic dataset publication, and cancellation;
-- machine-readable evidence for `punch run`.
+- catalog-wide producer/consumer validation for datasets;
+- data-source planning and producer switching;
+- workflow and load options selected independently;
+- producer sizing from a downstream workflow's demand;
+- allow-listed environment, argument-vector command, separate streams;
+- atomic dataset publication, bounded cancellation, run evidence.
 
-Punch does not provision the system under test, define business scenarios,
-schedule a distributed fleet, manage enterprise secrets, or replace k6 threshold
-evaluation. Those concerns stay outside the engine.
-
-## System view
+Out of scope: provisioning the system under test, business scenarios,
+distributed fleets, secrets, and k6 threshold evaluation.
 
 ```mermaid
 flowchart LR
@@ -39,305 +30,174 @@ flowchart LR
   Workflows["Workflow YAML"] --> Loader
   Options["Native k6 options JSON"] --> Planner
   Data["Dataset directory"] <--> Planner
-  Executor --> Compose["Docker Compose"]
-  Compose --> K6["k6 workflow"]
-  K6 --> Executor
-  Executor --> Artifacts["Logs, summaries, datasets"]
-  Adapter --> Evidence["Run evidence"]
+  Executor --> Compose["Docker Compose + k6"]
+  Executor --> Artifacts["Logs, summaries, datasets, evidence"]
 ```
 
-The Python process is the control plane. Compose and k6 are the execution plane.
-Files under the approved reports, state, logs, and data directories are the
-artifact plane. Keeping these planes separate makes the engine portable and
-keeps workload code unaware of orchestration.
+Python is the control plane; Compose and k6 are the execution plane; approved
+report, log, state, and data directories are the artifact plane. Scenarios
+know nothing about orchestration.
 
-### Component ownership
+| Component           | Module                                         | Owns                                                       |
+| ------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| CLI / assembly root | [`__main__.py`](../../src/punch/__main__.py)   | Arguments, sequencing, exit codes, `punch-run.json`        |
+| Menu adapter        | [`menu.py`](../../src/punch/menu.py)           | Terminal discovery, choices, confirmation                  |
+| Loader              | [`workflow.py`](../../src/punch/workflow.py)   | Immutable models, strict YAML/JSON, path containment       |
+| Catalog             | [`catalog.py`](../../src/punch/catalog.py)     | Cross-workflow dataset links and lookups                   |
+| Data planner        | [`data_plan.py`](../../src/punch/data_plan.py) | Source choice and producer switching (pure)                |
+| Sizing planner      | [`sizing.py`](../../src/punch/sizing.py)       | Demand normalization, sizing math, generated config (pure) |
+| Executor            | [`execution.py`](../../src/punch/execution.py) | Command vector, preflight, child lifecycle, datasets       |
 
-| Component                 | Reference module                                         | Owns                                                                 |
-| ------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
-| Assembly root and CLI     | [`src/punch/__main__.py`](../../src/punch/__main__.py)   | Argument parsing, top-level sequencing, exit codes, `punch-run.json` |
-| Interactive adapter       | [`src/punch/menu.py`](../../src/punch/menu.py)           | Terminal discovery, choices, confirmation, presentation              |
-| Workflow model and loader | [`src/punch/workflow.py`](../../src/punch/workflow.py)   | Immutable contracts, strict YAML/JSON validation, path containment   |
-| Catalog                   | [`src/punch/catalog.py`](../../src/punch/catalog.py)     | Cross-workflow producer/consumer validation and lookup               |
-| Data planner              | [`src/punch/data_plan.py`](../../src/punch/data_plan.py) | Pure, UI-independent source choice and producer switching            |
-| Sizing planner            | [`src/punch/sizing.py`](../../src/punch/sizing.py)       | Demand normalization, sizing math, generated producer config         |
-| Executor                  | [`src/punch/execution.py`](../../src/punch/execution.py) | Command vectors, preflight, child lifecycle, streams, datasets       |
+Adapters depend on engine modules; engine modules never import presentation.
 
-The adapters depend on the engine modules. Engine modules do not import terminal
-presentation. A clean-room implementation should preserve this dependency
-direction even if it uses another language or container runner.
+## 2. Core contracts
 
-## Core contracts
+**Workflow** (`apiVersion: punch/v1`, `kind: K6Workflow`). Declarative facts
+only; unknown or duplicate keys, invalid names, missing files, and paths
+escaping `workingDirectory` fail at load:
 
-### Workflow
-
-`K6Workflow` is the normalized, immutable execution contract. It identifies the
-working directory, Compose file and service, k6 script, optional default config,
-environment allow-list, required environment, summary outputs, datasets, and
-sizing inputs.
-
-The loader rejects malformed or ambiguous input before Docker starts, including
-unknown keys, duplicate YAML keys, unsupported YAML features, invalid names,
-missing referenced files, and paths escaping the workflow's working directory.
-Catalog loading then validates relationships that one file cannot validate:
-
-- workflow names are unique;
-- every declared dataset target exists and consumes that dataset;
-- every required dataset has at least one producer;
-- all producers of one dataset use the same ordered columns.
-
-### Plans and results
-
-Keep planning data separate from execution data:
-
-| Contract          | Meaning                                                                                             |
-| ----------------- | --------------------------------------------------------------------------------------------------- |
-| `DataPlan`        | The workflow that will actually run, selected data sources, output dataset, and any workflow switch |
-| `SizingPlan`      | Target demand, margin, producer iterations/VUs, affected datasets, and generated config             |
-| `ExecutionResult` | Planned command, child exit code, pass/fail reason, and dataset publication results                 |
-
-A preflight failure has no child exit code because no process started. A child
-failure preserves the child's code. This distinction is useful to automation and
-should not be collapsed into a single Boolean.
-
-## Execution paths
-
-### Direct `punch run`
-
-```mermaid
-sequenceDiagram
-  participant A as CLI adapter
-  participant C as Catalog/planners
-  participant E as Executor
-  participant D as Docker Compose/k6
-  participant R as Evidence
-  A->>C: Load workflow(s), config, and catalog
-  C-->>A: Validated workflow and optional plans
-  A->>E: Execute one selected workflow
-  E->>E: Preflight environment, data, and output paths
-  E->>D: One argument-vector compose run
-  D-->>E: Separate stdout, stderr, and exit code
-  E-->>A: Typed execution result
-  A->>R: Write reports/state/punch-run.json
+```yaml
+spec:
+  workingDirectory: ../..
+  compose: { file: docker-compose.yml, service: k6 }
+  k6: { script: /scripts/orders.js, config: options/5-iterations.json }
+  environment: { forward: [BASE_URL], required: [BASE_URL] }
+  outputs: { summary: { path: reports/orders-summary.json } }
+  data:
+    directory: data
+    mountedAt: /scripts/data
+    produces: [{ dataset: orders, columns: [orderId], targets: [order-status] }]
+    requires: [] # must exist with rows before Docker starts
+    optional: [] # used only when present
+  sizing: { iterationSeconds: 1.1, maxSeconds: 270, margin: 0.15 }
 ```
 
-For one workflow in a terminal, the CLI may first invoke the shared data planner.
-For `all`, it executes workflows sequentially and can keep going after failures.
-Validation and path-collision failures happen before the container starts.
+**Options.** A native k6 JSON object passed as `k6 run --config`, mounted
+read-only at `/punch/k6-config.json`. A one-run `--config` replaces
+`spec.k6.config`. k6 lets script options override the config, so scenarios
+must not export `scenarios`, `vus`, `iterations`, `duration`, or `stages`.
 
-The interactive `punch menu` calls the same loaders, planners, command builder,
-and executor. It adds terminal presentation and confirmation. It currently reports
-the result to the terminal but does not write the `punch run` evidence file; an
-independent implementation may unify that behavior if it treats the evidence
-contract as a deliberate compatibility choice.
+**Datasets.** A name plus a fixed ordered column list. The catalog checks both
+directions before any run: targets exist and consume the dataset, every
+required dataset has a producer, all producers agree on columns. Producers
+print `[DATA <dataset>] <csv-row>` on stdout; consumers receive
+`DATA_<DATASET>_CSV=<container path>`.
 
-### Data planning and producer switching
+**Results.** Planning and execution stay separate types:
 
-The planner receives a picker callback rather than owning terminal UI. It first
-settles each optional dataset: use scenario defaults or an available file. It then
-checks required inputs. When a required dataset is empty, it offers catalog-known
-producers and marks the recommended producer and missing environment variables.
+| Type              | Holds                                                             |
+| ----------------- | ----------------------------------------------------------------- |
+| `DataPlan`        | Workflow that will actually run, chosen sources, any switch       |
+| `SizingPlan`      | Target demand, margin, producer iterations/VUs, generated config  |
+| `ExecutionResult` | Command, child exit code or preflight failure, dataset row counts |
 
-Choosing a producer changes the workflow that will execute. Punch walks that
-producer's own data requirements, detects cycles, opts into the requested output,
-and still performs exactly one Compose run. After success, it tells the operator
-which original consumer to run next. Punch is therefore a guided single-step
-orchestrator, not a DAG executor.
+A preflight failure has no child exit code; a child failure keeps its code.
 
-### Options selection versus target-workflow selection
+## 3. Execution semantics
 
-These choices look similar in a menu but have different inputs and effects:
+- **One workflow, one Compose run** (`run --rm`). `punch run all` runs
+  workflows sequentially; chains stay operator- or CI-controlled.
+- **Preflight before Docker:** required environment, required data, valid
+  `--produce`, output-path collisions.
+- **Streams:** stdout and stderr read concurrently into separate logs; only
+  tagged stdout lines are data.
+- **Publication:** opt-in (`--produce <dataset>`). Rows are column-checked into
+  a same-directory temp file and atomically replace the target only after a
+  successful run with ≥ 1 valid row; otherwise the previous file survives.
+- **Cancellation:** the child runs in its own process group; Punch first sends
+  `SIGINT` to the container (`docker kill --signal=SIGINT`) so k6 can write its
+  summary, then terminates and reaps within bounded time.
+- **Data planning (TTY):** settle optional datasets, then for a missing
+  required dataset offer catalog producers (recommended one preselected). Picking one
+  switches the run to that producer, still one Compose run; Punch then names
+  the consumer to run next. `--no-input` skips the pickers.
+- **Evidence:** `punch run` writes `reports/state/punch-run.json` (workflow,
+  config identity, data sources, sizing, results, timing, exit code). The menu
+  reports to the terminal only. Old CSV/HTML/JSON files are not current-run
+  evidence.
 
-| Question           | Normal options selection                           | Size for a target workflow                                       |
-| ------------------ | -------------------------------------------------- | ---------------------------------------------------------------- |
-| Intent             | Choose the load shape for the selected workflow    | Produce enough rows for a later consumer                         |
-| Config read        | Selected workflow's default or chosen options JSON | Target workflow's default or chosen options JSON                 |
-| Config executed    | The selected JSON as-is                            | A generated config for the producer                              |
-| Workflow executed  | Selected workflow                                  | Producer workflow                                                |
-| Target executed    | Not applicable                                     | Never                                                            |
-| Dataset production | Optional operator choice                           | Required for linked target datasets                              |
-| Failure conditions | Invalid config or path                             | Invalid link, unsupported target shape, or missing sizing inputs |
+## 4. Options versus size-for-target
 
-Normal selection passes a native k6 JSON object through `k6 run --config`. It does
-not reinterpret the load model. A one-run `--config` overrides the workflow
-default.
+| Question         | Options selection               | Size for a target (`--size-for`)      |
+| ---------------- | ------------------------------- | ------------------------------------- |
+| Intent           | Load shape for the selected run | Enough rows for a later consumer      |
+| Config read      | Selected workflow's config      | Target's config (demand input)        |
+| Config executed  | That JSON as-is                 | Generated producer config             |
+| Workflow run     | Selected workflow               | Producer only; target never runs      |
+| Datasets written | Operator's `--produce` choice   | Linked target datasets, automatically |
 
-Sizing instead treats the target config as demand input. For one-row-per-iteration
-producers, Punch normalizes supported target shapes into rows `Y`:
+Sizing math (exact `Fraction` arithmetic; one row per iteration):
 
 ```text
 shared-iterations:  Y = iterations
-per-vu-iterations:  Y = vus * iterations
-constant-vus:       Y = ceil(vus * durationSeconds / targetIterationSeconds)
+per-vu-iterations:  Y = vus × iterations
+constant-vus:       Y = ceil(vus × durationSeconds / targetIterationSeconds)
 
-producer iterations N = ceil(Y * (1 + targetMargin))
-producer VUs        V = min(N, max(1,
-                         ceil(N * producerIterationSeconds / producerMaxSeconds)))
+producer iterations N = ceil(Y × (1 + targetMargin))
+producer VUs        V = min(N, max(1, ceil(N × producerIterationSeconds / producerMaxSeconds)))
 ```
 
-Punch writes a producer config with `shared-iterations`, `N` iterations, and `V`
-VUs while retaining compatible scenario metadata. The resulting producer—not the
-target—is run once. This separation avoids surprising side effects and makes the
-calculation testable without Docker.
+The producer runs a copy of its own config rewritten to `shared-iterations`
+with `N` and `V`, keeping executor-independent scenario keys. Other executors,
+staged or multi-scenario shapes, and missing sizing inputs fail before Docker.
+Punch warns when produced rows fall short of `Y`.
 
-## Execution and artifact invariants
+## 5. Design decisions
 
-The executor enforces the following behavior:
+| Decision                    | Why                                                  | Cost or limit                                        |
+| --------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| Declarative YAML workflows  | Workloads reviewable, consumer-owned; engine generic | Strict schema and migration discipline               |
+| Native k6 JSON configs      | No second load model; configs work outside Punch     | Script options can override; needs contract tests    |
+| Compose-mediated execution  | Reproducible toolchain; no host k6/Node              | Docker required; heavier startup                     |
+| One workflow per run        | Clear cancellation, exit codes, evidence             | Multi-step chains need repeated runs or a scheduler  |
+| Filesystem catalog/datasets | Offline, inspectable, portable                       | No concurrent-writer coordination or history         |
+| Pure planners               | CLI, menu, tests share one policy                    | Assembly root must keep UI out of planners           |
+| Tagged stdout + atomic swap | No data service; no partial publication              | Producers follow the line protocol; low volume only  |
+| Environment allow-list      | Limits secret leakage                                | Authors maintain forwarded/required names            |
+| Generated sizing config     | Reproducible demand; target untouched                | Single-shape policies; assumes one row per iteration |
 
-1. Build an argument vector; never evaluate a shell command string.
-2. Forward only environment names declared by the workflow, plus generated data
-   path variables.
-3. Mount the resolved config read-only and run one Compose service with `--rm`.
-4. Reject missing required data, environment, invalid production requests, and
-   output-path collisions before starting Docker.
-5. Read stdout and stderr concurrently. Only tagged stdout records of the form
-   `[DATA <dataset>] <csv-row>` are eligible dataset data.
-6. Validate field counts and buffer outputs in same-directory temporary files.
-   Publish only after the whole run succeeds; otherwise preserve the previous
-   dataset.
-7. Run the child in its own process group. On interruption, first ask the named
-   container to deliver `SIGINT` so k6 can emit summaries, then terminate and reap
-   the process group within bounded time.
+## 6. Reproduce independently
 
-`punch run` records the selected workflow, resolved config identity, data sources,
-sizing evidence, execution results, timing, and overall exit code in
-`reports/state/punch-run.json`. Logs and current evidence, not the mere presence of
-old datasets or reports, prove what happened in the current invocation.
+Build vertical slices in order; each is usable and tested before the next.
+Use neutral sample workflows; keep business URLs, credentials, and data out.
 
-## Design decisions and trade-offs
+| #   | Slice                 | Build                                                                                             | Accept when                                                           |
+| --- | --------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 1   | Contracts and loader  | Immutable models, versioned schema, native-config validation, typed results, exit codes           | Bad keys, names, refs, absolute or escaping paths fail before any run |
+| 2   | Catalog               | Sorted discovery; lookups: workflow, producers, recommended producer, sizing pairs                | Broken links and column mismatches fail at catalog load               |
+| 3   | Pure planners         | Data-source/producer switch as a state transition with a choice callback; sizing math             | Same inputs → same plan in CLI, menu, CI, tests; cycles fail typed    |
+| 4   | Executor              | Argument vector, preflight, one child, concurrent streams, bounded interrupt; injectable launcher | No shell; undeclared env absent; preflight failure starts no child    |
+| 5   | Dataset exchange      | Opt-in, tagged stdout only, CSV shape check, temp file beside destination, atomic swap            | Failed, empty, or malformed runs never replace valid data             |
+| 6   | Adapters and evidence | Non-interactive CLI first, then a menu over the same APIs; redacted evidence record               | Child exit codes survive; evidence correlates with logs               |
+| 7   | Restricted packaging  | Pinned dependencies and image digests, SBOM, checksums, schemas, offline install guide            | Install and contract suite pass with network disabled                 |
 
-| Decision                          | Why                                                                     | Cost or limit                                                                     |
-| --------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Declarative YAML workflows        | Workloads stay reviewable and consumer-owned                            | A strict schema and migration discipline are required                             |
-| Native k6 JSON configs            | No parallel load-model abstraction; configs remain usable outside Punch | k6 script-defined options can override config fields and need contract tests      |
-| Compose-mediated execution        | Reproducible network and toolchain without host k6/Node                 | Docker and Compose are required; startup is heavier than a host process           |
-| One workflow per run              | Simple cancellation, evidence, and failure semantics                    | Multi-step pipelines require an external scheduler or repeated invocations        |
-| Filesystem catalog and datasets   | Offline-friendly, inspectable, easy to transfer                         | No concurrent writer coordination or central history                              |
-| Pure planning functions           | CLI, menu, and tests share policy                                       | The assembly root must still keep presentation concerns out of planners           |
-| Tagged stdout plus atomic replace | No extra data service and no partial publication                        | Producers must follow the line protocol; high-volume data needs another transport |
-| Explicit environment allow-list   | Limits accidental secret leakage                                        | Descriptor authors must maintain required and forwarded names                     |
-| Generated sizing config           | Target demand is reproducible and the target stays untouched            | Supports only declared, single-shape policies and assumes measurable row yield    |
-
-## Independent implementation guide
-
-Implement these vertical slices in order. Each slice should work without access to
-this repository once its contracts and tests are defined.
-
-### 1. Establish portable contracts
-
-Define an immutable workflow model, a versioned descriptor schema, native runner
-config validation, typed plan/result models, and documented exit codes. Use neutral
-sample workflows; keep internal business URLs, credentials, and datasets out of the
-implementation package.
-
-Acceptance: invalid keys, duplicate keys/names, missing references, absolute paths,
-and path escapes fail deterministically before any runner call.
-
-### 2. Build the loader and catalog
-
-Normalize each descriptor once and validate cross-workflow dataset links. Provide
-queries for workflow lookup, producers of a dataset, the recommended producer, and
-valid sizing target pairs. Sort discovery and diagnostic output for reproducibility.
-
-Acceptance: broken producer/consumer links and column disagreements fail at catalog
-load, not halfway through a run.
-
-### 3. Add pure planning
-
-Implement data-source resolution and producer switching as a state transition that
-accepts a choice function. Separately normalize target load shapes and calculate a
-sizing plan using exact arithmetic at rounding boundaries. Neither planner starts a
-process or renders terminal UI.
-
-Acceptance: the same inputs yield the same plan in CLI, menu, CI, and unit tests;
-cycles and unsupported shapes return typed failures.
-
-### 4. Build a deterministic executor
-
-Generate a process argument vector from validated inputs. Preflight environment and
-data, start one isolated child, read both streams concurrently, preserve the exit
-code, and implement bounded interruption. Inject the process launcher in tests so
-the core suite needs no Docker daemon.
-
-Acceptance: no shell is invoked, undeclared environment values are absent, and a
-preflight failure starts no child.
-
-### 5. Add transactional dataset exchange
-
-Make publication opt-in. Parse only declared, tagged stdout records; validate CSV
-shape; write beside the destination; and replace all requested outputs only after a
-successful run. Discard temporary files on failure, interruption, malformed output,
-or zero acceptable rows.
-
-Acceptance: failure cannot replace the last valid file, stderr is never harvested,
-and path aliases with evidence or logs are rejected.
-
-### 6. Add adapters and evidence
-
-Build a non-interactive CLI first, then an optional menu over the same APIs. Emit a
-redacted evidence record for success, preflight failure, launch failure, child
-failure, and interruption. Decide explicitly whether interactive runs share the
-same evidence contract.
-
-Acceptance: cancellation happens before Docker, child exit codes survive the
-adapter, and current evidence can be correlated with its logs.
-
-### 7. Package for a restricted environment
-
-Mirror and pin the language dependencies and Compose/k6 images. Export checksums,
-an SBOM, licenses, schemas, neutral fixtures, and offline install/verification
-instructions. The protected environment should supply its own workflows, runner
-network policy, secrets, and synthetic or approved datasets.
-
-Acceptance: install and the contract suite succeed with network access disabled.
-
-## Enterprise hardening checklist
+## 7. Restricted-environment hardening
 
 - Verify dependency and image digests; fail on undeclared network access.
-- Review descriptors as executable configuration and require schema-version
-  migration for breaking changes.
-- Constrain every read, mount, and write to approved roots after resolving links.
-- Run containers with a dedicated identity, read-only inputs, bounded writable
-  mounts, resource/time limits, and an allow-listed network path to the target.
-- Obtain secrets from the enterprise secret mechanism; never place values in
-  descriptors, options, command previews, logs, or evidence.
-- Use synthetic data by default and apply classification, encryption, retention,
-  and deletion rules to datasets and artifacts.
-- Redact sensitive URLs and values from evidence. Integrity-protect evidence used
-  for audit or release decisions.
-- Treat interactive confirmation as usability, not authorization; CI identities
-  and policy gates provide authorization.
+- Treat descriptors as code: safe YAML loading, pinned schema version, review.
+- Resolve every read, mount, and write beneath an approved root.
+- Never evaluate a shell string; never interpolate descriptor values.
+- Secrets come from the enterprise secret mechanism, never descriptors,
+  presets, command previews, logs, or evidence.
+- Runner: dedicated identity, read-only inputs, bounded writable mounts,
+  resource/time limits, network limited to the system under test.
+- Synthetic data by default; classify, encrypt, retain, delete per policy.
+- Redact evidence; integrity-protect it when it backs audit decisions.
+- Interactive confirmation is usability, not authorization; CI uses
+  pre-authorized identities and policy gates.
 
-## Reproduction acceptance checklist
+## 8. Source of truth
 
-- A workflow and a normal options config can be selected independently.
-- Sizing producer A for target B executes A once and never executes B.
-- Every supported target shape matches the documented sizing formulas.
-- Invalid descriptors, links, configs, paths, or required data start no child.
-- Only declared environment names and generated dataset paths reach the container.
-- Failed, empty, or malformed producer output cannot replace valid data.
-- stdout and stderr remain distinct; logs retain both without harvesting stderr.
-- Interrupts clean up the child and container without losing the k6 summary when it
-  can be emitted.
-- Evidence distinguishes preflight, launch, child, and orchestration failures.
-- The full distribution installs and verifies offline.
+| Concern                              | Source                                         | Proof                                                                                                                          |
+| ------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Schema and path containment          | [`workflow.py`](../../src/punch/workflow.py)   | [`test_workflow.py`](../../tests/test_workflow.py)                                                                             |
+| Catalog links                        | [`catalog.py`](../../src/punch/catalog.py)     | [`test_catalog.py`](../../tests/test_catalog.py)                                                                               |
+| Data planning and switching          | [`data_plan.py`](../../src/punch/data_plan.py) | [`test_data_plan.py`](../../tests/test_data_plan.py)                                                                           |
+| Command, streams, data, cancellation | [`execution.py`](../../src/punch/execution.py) | [`test_execution.py`](../../tests/test_execution.py)                                                                           |
+| Sizing and generated config          | [`sizing.py`](../../src/punch/sizing.py)       | [`test_sizing.py`](../../tests/test_sizing.py)                                                                                 |
+| Interactive selection                | [`menu.py`](../../src/punch/menu.py)           | [`test_menu.py`](../../tests/test_menu.py)                                                                                     |
+| CLI sequencing and evidence          | [`__main__.py`](../../src/punch/__main__.py)   | [`test_cli.py`](../../tests/test_cli.py)                                                                                       |
+| End-to-end contracts                 | —                                              | [`test_ci_contract.py`](../../tests/test_ci_contract.py), [`test_workflow_coverage.py`](../../tests/test_workflow_coverage.py) |
 
-## Source-of-truth map
-
-These files demonstrate Punch's current behavior. They are references, not runtime
-dependencies for an independent implementation.
-
-| Concern                              | Source and proof                                                                                                                           |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Workflow schema and containment      | [`src/punch/workflow.py`](../../src/punch/workflow.py), [`tests/test_workflow.py`](../../tests/test_workflow.py)                           |
-| Catalog relationships                | [`src/punch/catalog.py`](../../src/punch/catalog.py), [`tests/test_catalog.py`](../../tests/test_catalog.py)                               |
-| Data planning and switching          | [`src/punch/data_plan.py`](../../src/punch/data_plan.py), [`tests/test_data_plan.py`](../../tests/test_data_plan.py)                       |
-| Command, streams, data, cancellation | [`src/punch/execution.py`](../../src/punch/execution.py), [`tests/test_execution.py`](../../tests/test_execution.py)                       |
-| Sizing formulas and generated config | [`src/punch/sizing.py`](../../src/punch/sizing.py), [`tests/test_sizing.py`](../../tests/test_sizing.py)                                   |
-| Interactive selection                | [`src/punch/menu.py`](../../src/punch/menu.py), [`tests/test_menu.py`](../../tests/test_menu.py)                                           |
-| CLI sequencing and evidence          | [`src/punch/__main__.py`](../../src/punch/__main__.py), [`tests/test_cli.py`](../../tests/test_cli.py)                                     |
-| End-to-end contracts                 | [`tests/test_ci_contract.py`](../../tests/test_ci_contract.py), [`tests/test_workflow_coverage.py`](../../tests/test_workflow_coverage.py) |
-
-When this document and tested behavior disagree, change the document or make an
-explicit contract change with tests. Do not create a second implementation rule in
-prose.
+When prose and tested behavior disagree, fix the prose or make an explicit,
+tested contract change.
