@@ -1,0 +1,21 @@
+# Punch's Kubernetes runtime: the generic punch-k6-run WorkflowTemplate, its
+# shell step, and the executor RBAC. A consumer adds this directory as a
+# kustomize resource, sets `namespace:`, lists kustomizeconfig.yaml under
+# `configurations:`, maps the k6-scenarios images, and provides the
+# punch-k6-options ConfigMap and a default artifact repository. README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rbac.yaml
+  - punch-k6-run.yaml
+
+configMapGenerator:
+  - name: punch-k6-run-script
+    files:
+      - k6-run.sh
+
+# The WorkflowTemplate references the ConfigMap by name, which kustomize does
+# not rewrite inside custom resources, so keep the name stable.
+generatorOptions:
+  disableNameSuffixHash: true

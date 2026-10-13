@@ -1,0 +1,27 @@
+# Service account the punch-k6-run pods run as. Argo's executor reports step
+# results through WorkflowTaskResults; nothing else is needed.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: punch-executor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: punch-executor
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [workflowtaskresults]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: punch-executor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: punch-executor
+subjects:
+  - kind: ServiceAccount
+    name: punch-executor

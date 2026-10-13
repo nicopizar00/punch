@@ -1,0 +1,224 @@
+# Punch's step for Argo Workflows: one k6 run of a consumer's scenario image,
+# with Punch's dataset preflight and [DATA] harvest (k6-run.sh, mounted from
+# the punch-k6-run-script ConfigMap). Consumers call it from thin
+# per-workflow WorkflowTemplates via templateRef; contract: README.md.
+# k6 and k6-browser differ only in the image placeholder and the /dev/shm
+# volume Chromium needs.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: punch-k6-run
+spec:
+  templates:
+    - name: k6
+      serviceAccountName: punch-executor
+      # Bounds a run that never starts (e.g. ImagePullBackOff) so an Argo CD
+      # hook fails instead of hanging.
+      activeDeadlineSeconds: 900
+      archiveLocation:
+        archiveLogs: true
+      inputs:
+        parameters:
+          - name: workflow
+          - name: script
+          - name: config
+            default: ""
+          - name: base-url
+          - name: forward
+            default: ""
+          - name: extra-env
+            default: ""
+          - name: requires
+            default: ""
+          - name: requires-hint
+            default: ""
+          - name: produces
+            default: ""
+          - name: produce
+            default: ""
+        artifacts:
+          - name: datasets
+            path: /scripts/data
+            optional: true
+            s3:
+              key: datasets
+      outputs:
+        parameters:
+          - name: datasets
+            valueFrom:
+              path: /punch/out/rows.txt
+              default: ""
+        artifacts:
+          - name: datasets
+            path: /punch/out/datasets
+            optional: true
+            archive:
+              none: {}
+            s3:
+              key: datasets
+          - name: reports
+            path: /scripts/reports
+            optional: true
+            archive:
+              none: {}
+            s3:
+              key: "runs/{{workflow.name}}/reports"
+      container:
+        image: k6-scenarios
+        imagePullPolicy: Always
+        command: [sh, /punch/bin/k6-run.sh]
+        env:
+          - name: PUNCH_WORKFLOW
+            value: "{{inputs.parameters.workflow}}"
+          - name: PUNCH_SCRIPT
+            value: "{{inputs.parameters.script}}"
+          - name: PUNCH_CONFIG
+            value: "{{inputs.parameters.config}}"
+          - name: BASE_URL
+            value: "{{inputs.parameters.base-url}}"
+          - name: PUNCH_FORWARD
+            value: "{{inputs.parameters.forward}}"
+          - name: PUNCH_EXTRA_ENV
+            value: "{{inputs.parameters.extra-env}}"
+          - name: PUNCH_REQUIRES
+            value: "{{inputs.parameters.requires}}"
+          - name: PUNCH_REQUIRES_HINT
+            value: "{{inputs.parameters.requires-hint}}"
+          - name: PUNCH_PRODUCES
+            value: "{{inputs.parameters.produces}}"
+          - name: PUNCH_PRODUCE
+            value: "{{inputs.parameters.produce}}"
+          # As in compose: console.log [DATA] records must reach stdout
+          # unwrapped for the harvest.
+          - name: K6_LOG_OUTPUT
+            value: stdout
+          - name: K6_LOG_FORMAT
+            value: raw
+        volumeMounts:
+          - name: punch-bin
+            mountPath: /punch/bin
+          - name: punch-options
+            mountPath: /punch/options
+          - name: punch-out
+            mountPath: /punch/out
+          - name: reports
+            mountPath: /scripts/reports
+      volumes:
+        - name: punch-bin
+          configMap:
+            name: punch-k6-run-script
+        - name: punch-options
+          configMap:
+            name: punch-k6-options
+        - name: punch-out
+          emptyDir: {}
+        - name: reports
+          emptyDir: {}
+
+    - name: k6-browser
+      serviceAccountName: punch-executor
+      activeDeadlineSeconds: 900
+      archiveLocation:
+        archiveLogs: true
+      inputs:
+        parameters:
+          - name: workflow
+          - name: script
+          - name: config
+            default: ""
+          - name: base-url
+          - name: forward
+            default: ""
+          - name: extra-env
+            default: ""
+          - name: requires
+            default: ""
+          - name: requires-hint
+            default: ""
+          - name: produces
+            default: ""
+          - name: produce
+            default: ""
+        artifacts:
+          - name: datasets
+            path: /scripts/data
+            optional: true
+            s3:
+              key: datasets
+      outputs:
+        parameters:
+          - name: datasets
+            valueFrom:
+              path: /punch/out/rows.txt
+              default: ""
+        artifacts:
+          - name: datasets
+            path: /punch/out/datasets
+            optional: true
+            archive:
+              none: {}
+            s3:
+              key: datasets
+          - name: reports
+            path: /scripts/reports
+            optional: true
+            archive:
+              none: {}
+            s3:
+              key: "runs/{{workflow.name}}/reports"
+      container:
+        image: k6-scenarios-browser
+        imagePullPolicy: Always
+        command: [sh, /punch/bin/k6-run.sh]
+        env:
+          - name: PUNCH_WORKFLOW
+            value: "{{inputs.parameters.workflow}}"
+          - name: PUNCH_SCRIPT
+            value: "{{inputs.parameters.script}}"
+          - name: PUNCH_CONFIG
+            value: "{{inputs.parameters.config}}"
+          - name: BASE_URL
+            value: "{{inputs.parameters.base-url}}"
+          - name: PUNCH_FORWARD
+            value: "{{inputs.parameters.forward}}"
+          - name: PUNCH_EXTRA_ENV
+            value: "{{inputs.parameters.extra-env}}"
+          - name: PUNCH_REQUIRES
+            value: "{{inputs.parameters.requires}}"
+          - name: PUNCH_REQUIRES_HINT
+            value: "{{inputs.parameters.requires-hint}}"
+          - name: PUNCH_PRODUCES
+            value: "{{inputs.parameters.produces}}"
+          - name: PUNCH_PRODUCE
+            value: "{{inputs.parameters.produce}}"
+          - name: K6_LOG_OUTPUT
+            value: stdout
+          - name: K6_LOG_FORMAT
+            value: raw
+        volumeMounts:
+          - name: punch-bin
+            mountPath: /punch/bin
+          - name: punch-options
+            mountPath: /punch/options
+          - name: punch-out
+            mountPath: /punch/out
+          - name: reports
+            mountPath: /scripts/reports
+          # Chromium needs more than the default 64 MB (compose shm_size).
+          - name: dshm
+            mountPath: /dev/shm
+      volumes:
+        - name: punch-bin
+          configMap:
+            name: punch-k6-run-script
+        - name: punch-options
+          configMap:
+            name: punch-k6-options
+        - name: punch-out
+          emptyDir: {}
+        - name: reports
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi

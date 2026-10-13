@@ -1,0 +1,7 @@
+# Lets a consumer's kustomize `images:` rewrite the k6-scenarios /
+# k6-scenarios-browser placeholders inside punch-k6-run. List this file under
+# `configurations:` in the consumer kustomization: a base's configurations do
+# not apply to its overlays.
+images:
+  - path: spec/templates[]/container/image
+    kind: WorkflowTemplate

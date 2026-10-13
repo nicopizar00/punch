@@ -1,0 +1,18 @@
+# Example default artifact repository on real AWS S3 for the namespace that
+# runs punch-k6-run. Credentials come from the pod's IAM role (IRSA on EKS),
+# so no keys are stored. Not part of the kustomize base: consumers ship
+# their own (a local stand-in, or this shape with their bucket).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: artifact-repositories
+  annotations:
+    workflows.argoproj.io/default-artifact-repository: s3
+data:
+  s3: |
+    s3:
+      endpoint: s3.amazonaws.com
+      bucket: my-punch-artifacts
+      region: us-east-1
+      useSDKCreds: true
+      keyFormat: "runs/{{workflow.name}}/{{pod.name}}"
