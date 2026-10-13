@@ -154,13 +154,20 @@ class K6RunScriptTests(unittest.TestCase):
         result = self.run_script(requires="carts")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_required_dataset_paths_are_exported(self) -> None:
-        (self.data / "carts.csv").write_text("cartId,productId,sid\nc1,p1,s1\n")
+    def test_required_dataset_path_is_exported(self) -> None:
         (self.data / "auth-tokens.csv").write_text("username,authToken\nu,t\n")
-        self.assertEqual(self.run_script(requires="carts auth-tokens").returncode, 0)
+        self.assertEqual(self.run_script(requires="auth-tokens").returncode, 0)
         env = self.env_file.read_text().splitlines()
-        self.assertIn(f"DATA_CARTS_CSV={self.data / 'carts.csv'}", env)
         self.assertIn(f"DATA_AUTH_TOKENS_CSV={self.data / 'auth-tokens.csv'}", env)
+
+    def test_more_than_one_required_dataset_exits_2_before_k6(self) -> None:
+        # The template downloads exactly one dataset file (datasets/<requires>.csv).
+        (self.data / "carts.csv").write_text("cartId,productId,sid\nc1,p1,s1\n")
+        (self.data / "orders.csv").write_text("orderId\no-1\n")
+        result = self.run_script(requires="carts orders")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("one required dataset", result.stderr)
+        self.assertFalse(self.k6_ran())
 
     # --- harvest -----------------------------------------------------------
 

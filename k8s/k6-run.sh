@@ -55,6 +55,12 @@ else
   done
 fi
 
+# The template downloads exactly one dataset file (datasets/<requires>.csv).
+set -- $requires
+if [ "$#" -gt 1 ]; then
+  die 2 "$workflow requires $*; the Kubernetes runtime supports one required dataset per workflow"
+fi
+
 set -- run "$script"
 if [ -n "$config" ]; then
   set -- "$@" --config "$options_dir/$config.json"

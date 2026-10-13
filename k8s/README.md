@@ -25,7 +25,7 @@ The compose runtime (`punch run`) is unchanged.
 | `config` | no | `5-iterations` | Preset → `k6 run --config /punch/options/<config>.json` |
 | `forward` | no | `EXPECT_TEMPERATURE USERS` | Names `extra-env` may set |
 | `extra-env` | no | `EXPECT_TEMPERATURE=hot` | Space-separated `K=V`, each passed as `-e K=V`; values cannot contain spaces |
-| `requires` | no | `carts` | Datasets that must exist with ≥ 1 row |
+| `requires` | no | `carts` | The one dataset that must exist with ≥ 1 row (more than one exits 2) |
 | `requires-hint` | no | `carts=browser-cart,http-cart` | Producers named in the preflight failure |
 | `produces` | no | `orders=orderId` | Declared datasets and columns, `<ds>=<col>,<col>` space-separated |
 | `produce` | no | `orders` or `all` | Datasets this run publishes (comma-separated) |
@@ -36,8 +36,8 @@ and `DATA_<DATASET>_CSV=/scripts/data/<dataset>.csv` per required dataset
 
 ## Behavior
 
-1. **Validate** — an undeclared `produce` entry or an `extra-env` name outside
-   `forward` exits 2 before anything runs.
+1. **Validate** — an undeclared `produce` entry, an `extra-env` name outside
+   `forward`, or more than one `requires` dataset exits 2 before anything runs.
 2. **Preflight** — a required dataset that is missing or has no row after its
    header exits 1: `<workflow> requires "<ds>"; produce it with: <producers>
    (--produce <ds>)`.
@@ -58,7 +58,7 @@ CSV.
 
 | Direction | Path | S3 key |
 | --- | --- | --- |
-| In (optional) | `/scripts/data` | `datasets/` |
+| In (optional) | `/scripts/data/<requires>.csv` | `datasets/<requires>.csv` — one file, so an empty `datasets/` folder cannot break the load |
 | Out (optional, `archive: none`) | `/punch/out/datasets` | `datasets/` — only written files replace objects |
 | Out (optional, `archive: none`) | `/scripts/reports` | `runs/{{workflow.name}}/reports/` |
 | Logs | — | `archiveLogs: true` → repository `keyFormat` |

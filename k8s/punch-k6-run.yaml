@@ -43,12 +43,17 @@ spec:
             default: ""
           - name: produce
             default: ""
+        # One optional file rather than the datasets/ prefix: an empty
+        # datasets/ folder (left behind when every object is deleted) makes
+        # Argo fail an optional directory input. requires holds at most one
+        # dataset; with none, the key datasets/.csv never exists and the
+        # artifact is skipped.
         artifacts:
-          - name: datasets
-            path: /scripts/data
+          - name: dataset
+            path: "/scripts/data/{{inputs.parameters.requires}}.csv"
             optional: true
             s3:
-              key: datasets
+              key: "datasets/{{inputs.parameters.requires}}.csv"
       outputs:
         parameters:
           - name: datasets
@@ -150,12 +155,17 @@ spec:
             default: ""
           - name: produce
             default: ""
+        # One optional file rather than the datasets/ prefix: an empty
+        # datasets/ folder (left behind when every object is deleted) makes
+        # Argo fail an optional directory input. requires holds at most one
+        # dataset; with none, the key datasets/.csv never exists and the
+        # artifact is skipped.
         artifacts:
-          - name: datasets
-            path: /scripts/data
+          - name: dataset
+            path: "/scripts/data/{{inputs.parameters.requires}}.csv"
             optional: true
             s3:
-              key: datasets
+              key: "datasets/{{inputs.parameters.requires}}.csv"
       outputs:
         parameters:
           - name: datasets

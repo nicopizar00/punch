@@ -95,10 +95,16 @@ class PunchK6RunTemplateTests(unittest.TestCase):
 
     def test_datasets_move_through_one_s3_prefix(self) -> None:
         for template in _templates().values():
+            # One optional file, not the whole prefix: an empty datasets/
+            # folder makes Argo fail an optional directory input.
             [dataset_input] = template["inputs"]["artifacts"]
             self.assertEqual(
                 (dataset_input["path"], dataset_input["s3"]["key"], dataset_input["optional"]),
-                ("/scripts/data", "datasets", True),
+                (
+                    "/scripts/data/{{inputs.parameters.requires}}.csv",
+                    "datasets/{{inputs.parameters.requires}}.csv",
+                    True,
+                ),
             )
             outputs = {a["name"]: a for a in template["outputs"]["artifacts"]}
             self.assertEqual(outputs["datasets"]["path"], "/punch/out/datasets")
