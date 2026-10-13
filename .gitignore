@@ -1,29 +1,10 @@
 dist/
 reports/
-# Graphify shared-artifact policy:
-# - only root graphify-out/graph.json and graphify-out/GRAPH_REPORT.md may be tracked
-# - nested or renamed graphify output folders stay local-only
-graphify-out/*
-**/graphify-out/*
-graphify-out-*/*
-**/graphify-out-*/*
-graphify-out_*/*
-**/graphify-out_*/*
-# Allowlist: committed shared artifacts only (no local paths)
-!graphify-out/graph.json
-!graphify-out/GRAPH_REPORT.md
+# Graphify output stays local
+graphify-out*/
 node_modules/
 __pycache__/
 *.pyc
 .python-version
 .copilot/
 
-# .ai-upstream/ is a LOCAL staging area: safe-copy upstream skills here, then
-# promote/adapt into .github/ (canon). Not version-controlled. See .ai-upstream/.gitkeep
-.ai-upstream/*
-!.ai-upstream/.gitkeep
-
-# .github/.ai-upstream/ tracks only the required-vendor-skill manifest; the
-# manually-installed vendor skill folders stay untracked (kept verbatim).
-.github/.ai-upstream/*
-!.github/.ai-upstream/README.md

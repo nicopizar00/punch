@@ -10,17 +10,12 @@
     ".claude/rules": false,
     "~/.claude/rules": false
   },
-  "chat.promptFilesLocations": {
-    ".github/prompts": true
-  },
   "chat.agentFilesLocations": {
-    ".github/agents": true,
     ".claude/agents": false,
     ".agents/agents": false
   },
   "chat.useAgentSkills": true,
   "chat.agentSkillsLocations": {
-    ".github/skills": true,
     ".claude/skills": false,
     ".agents/skills": false,
     "~/.claude/skills": false,

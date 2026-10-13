@@ -1,25 +1,18 @@
-# Punch repository-level Graphify config — controls the shared, committed corpus.
-# Excludes noisy / generated / vendored paths from the knowledge-graph corpus
-# so `graphify .` maps the source of truth, not build output.
+# Local Graphify config: keeps generated, vendored, and noisy paths out of
+# `graphify .` so the graph maps source, not build output. Output is gitignored.
 
 # Build / generated output
 dist/
 build/
 reports/
 artifacts/
-graphify-out/
-**/graphify-out/
-graphify-out-*/
-**/graphify-out-*/
-graphify-out_*/
-**/graphify-out_*/
+graphify-out*/
 
 # Dependencies / vendored
 node_modules/
 coverage/
 
-# Gitignored local-only staging — absent on fresh clones; never in the shared graph
-.ai-upstream/
+# Local tool state
 .copilot/
 
 # Version control + environment
@@ -34,7 +27,7 @@ __pycache__/
 *.lock
 package-lock.json
 
-# Deferred corpus — explicit opt-in only (ADR 0002, Team Sharing)
+# Binary and media files
 *.pdf
 *.png
 *.jpg
