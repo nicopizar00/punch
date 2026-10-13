@@ -12,6 +12,13 @@ spec:
   templates:
     - name: k6
       serviceAccountName: punch-executor
+      # The whole pod runs as the grafana/k6 image user: Argo's init container
+      # writes input artifacts as the pod user, and as root it would leave
+      # /scripts/data unreadable (0700) for k6.
+      securityContext:
+        runAsUser: 12345
+        runAsGroup: 12345
+        runAsNonRoot: true
       # Bounds a run that never starts (e.g. ImagePullBackOff) so an Argo CD
       # hook fails instead of hanging.
       activeDeadlineSeconds: 900
@@ -117,6 +124,10 @@ spec:
 
     - name: k6-browser
       serviceAccountName: punch-executor
+      securityContext:
+        runAsUser: 12345
+        runAsGroup: 12345
+        runAsNonRoot: true
       activeDeadlineSeconds: 900
       archiveLocation:
         archiveLogs: true

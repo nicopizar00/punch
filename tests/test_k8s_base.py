@@ -64,6 +64,15 @@ class PunchK6RunTemplateTests(unittest.TestCase):
             self.assertEqual(template["serviceAccountName"], "punch-executor")
             self.assertTrue(template["archiveLocation"]["archiveLogs"])
 
+    def test_pod_runs_as_the_k6_image_user(self) -> None:
+        # Argo's init container writes input artifacts as the pod user; as
+        # root it creates /scripts/data 0700, which k6 (uid 12345) cannot read.
+        for template in _templates().values():
+            self.assertEqual(
+                template["securityContext"],
+                {"runAsUser": 12345, "runAsGroup": 12345, "runAsNonRoot": True},
+            )
+
     def test_runs_the_mounted_script_in_the_consumer_image(self) -> None:
         images = {name: t["container"]["image"] for name, t in _templates().items()}
         self.assertEqual(images, {"k6": "k6-scenarios", "k6-browser": "k6-scenarios-browser"})
