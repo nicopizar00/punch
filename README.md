@@ -156,3 +156,9 @@ evidence rules: [validation.md](docs/workflows/validation.md).
 | [Specs](docs/specs/) | Feature specs: data pickers, target sizing, native k6 config |
 | [CLAUDE.md](CLAUDE.md) | Project rules |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, PRs |
+
+## Kubernetes runtime
+
+`k8s/` runs the same workflows natively on Argo Workflows — no Python in the
+cluster, datasets and evidence in S3. Contract and consumer setup:
+[`k8s/README.md`](k8s/README.md).

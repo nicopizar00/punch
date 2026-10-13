@@ -57,6 +57,20 @@ reusable `src/punch/` engine. This repository's `workflows/k6/*.yaml` and k6
 files are bundled fixtures that demonstrate the engine; they do not make Punch
 the owner of a consumer's workloads.
 
+## Kubernetes runtime (`k8s/`)
+
+A second runtime for consumers on Kubernetes
+([ADR 0006](../decisions/0006-kubernetes-runtime.md)). It holds no Python.
+
+| Layer | Owns | Never owns |
+|---|---|---|
+| `k8s/punch-k6-run.yaml` | Step shape: parameters, env, mounts, S3 artifacts, deadline | Consumer images, presets, targets |
+| `k8s/k6-run.sh` | Validation, preflight, `[DATA]` harvest, atomic publication | Scheduling, S3 I/O (Argo's executor) |
+| Consumer | Thin per-workflow templates, image mapping, `punch-k6-options`, artifact repository | The step's semantics |
+
+Anti-pattern 4 below is a compose-runtime rule: on Kubernetes, k6 runs
+directly in the step's pod.
+
 ## Allowed calls
 
 | Layer | May call | Must not call |

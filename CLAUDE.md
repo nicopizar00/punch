@@ -13,6 +13,10 @@ the pipeline internals.
     TypeScript source  →  esbuild (k6.Dockerfile builder stage)  →  k6 image  →
     k6 run (one docker compose run per workflow)  →  reports/
 
+The Kubernetes runtime ([`k8s/README.md`](k8s/README.md)) keeps the chain up
+to the k6 image, then runs one Argo Workflows step per workflow with S3
+artifacts instead of `docker compose run`.
+
 Every change preserves this chain. If a change does not fit it, stop and
 discuss.
 
@@ -23,6 +27,7 @@ discuss.
 | `bin/punch` | Shell shim → `python3 -m punch` |
 | `bin/*` | Legacy wrappers over `punch run` / `docker compose` |
 | `src/punch/` | Engine: `__main__` (CLI, evidence), `workflow` (strict loader), `catalog` (dataset links), `data_plan` (pickers, pure), `sizing` (pure), `execution` (compose run, streams, datasets), `menu` (terminal UI) |
+| `k8s/` | Kubernetes runtime (ADR 0006): `punch-k6-run` WorkflowTemplate, `k6-run.sh` step, executor RBAC — no Python |
 | `src/tests/` | k6 TypeScript; `support/report.ts` builds HTML + JSON summaries |
 | `src/lib/`, `src/utils/`, `src/types/` | k6 helpers behind the `@lib` / `@utils` / `@app-types` aliases |
 | `src/services/` | Reference app (Node; dependencies install inside Docker) |
