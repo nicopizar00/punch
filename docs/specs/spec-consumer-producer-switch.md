@@ -1,9 +1,8 @@
 # Spec — Data source selection and producer switch
 
-> **Status:** Draft for human approval (rev 4 — design review fixes:
-> `--no-input`, `--data <dataset>=default`, `PlanStop` reasons, forced
-> produce after a switch, menu Esc semantics, `dataSources` evidence,
-> still-missing hint, missing-environment tag, `data_plan` module)
+> **Status:** Implemented 2026-10-07 (rev 4). Changed since: the menu now
+> asks before writing a switched dataset instead of forcing the produce
+> ([`spec-target-data-sizing.md`](spec-target-data-sizing.md)).
 
 - **Goal** — Before any Docker prompt or Docker call, Punch settles where each
   dataset a workflow reads comes from. Interactively:

@@ -4,60 +4,44 @@ description: Behavior rules for the Python orchestrator (bin/punch and src/punch
 ---
 # Python Orchestrator — Path Instructions
 
-Scope: `bin/punch` and all under `src/punch/`.
+Scope: `bin/punch` and `src/punch/`. Module map:
+[reference architecture §1](../../docs/architecture/reference-architecture-and-implementation-guide.md#1-solution).
 
 ## Rules
 
-- **Pinned runtime.** Docker, Python 3.10+, and the pinned
-  `requirements.txt` are host prerequisites. Punch orchestration is Python
-  plus PyYAML; all other orchestration logic remains standard-library based.
-  Installation is an explicit setup step, never an action of `punch run`.
-- **Single responsibility — orchestration.** Orchestrator own control
-  flow: arg parse, workflow launch, logs, dataset harvesting and preflight,
-  exit-code propagation, and evidence write. `src/punch/execution.py` owns
-  launch, logs, confirmation, and data harvesting. It does not own Docker
-  semantics, k6 thresholds,
-  or report HTML — those belong to compose, k6 scripts,
-  `src/tests/support/`.
-- **Stream subprocess output separately, no buffer.** Every `Popen` reads
-  `stdout` and `stderr` line by line and forwards each to its matching terminal
-  stream. Only stdout may carry `[DATA <dataset>]` records; stderr is never harvested as
-  CSV. Native command output reaches the terminal live and the run log.
-- **Exit codes propagate.** CLI exit code = child process exit
-  code (or first non-zero in sequence). Never swallow non-zero.
-- **Evidence artifact mandatory.** Every `run` writes
-  `reports/state/punch-run.json` with tests, per-workflow `exitCode`,
-  `passed`, `failure`, and `datasets`, plus overall
-  `exitCode`, `passed`, `startedAt`, and `durationSeconds`. Write even on
-  failure.
-- **Artifact paths explicit.** Use `pathlib.Path`, anchor every path
-  to `REPO_ROOT`. No relative `./reports/`; no `os.getcwd()` surprise.
-- **Docker Compose invocations consistent.** One selected workflow equals one
-  explicit `docker compose ... run --rm <service>` invocation (never
-  `docker run`); use the workflow's declared working directory and compose
-  file. `punch run` does not build images.
-- **Bash thin-wrapper principle.** `bin/punch` exec Python module —
-  no logic, no path massage, no env default. Logic in
-  `bin/` → move to `src/punch/`.
-- **Data prompts only.** Interactive prompting is allowed only for the
-  per-dataset produce opt-in (menu) and the consumed-data delete prompt;
-  non-interactive runs opt in with `--produce` and never delete. Bundled
-  workflows declare no data. No other TTY assumption or terminal-colour gating.
-- **No new subcommands without a plan.** Adding a command changes the
-  public CLI.
+- **Pinned runtime.** Python 3.10+ with the pinned `requirements.txt`
+  (PyYAML for loading; simple-term-menu and rich for the menu). Everything
+  else is standard library. Installation is a setup step, never part of
+  `punch run`.
+- **Orchestration only.** The engine owns argument parsing, loading,
+  planning, launch, logs, dataset preflight and harvesting, exit codes, and
+  evidence. Docker semantics belong to Compose, thresholds to k6 scripts,
+  report HTML to `src/tests/support/`.
+- **Pure planners.** `data_plan.py` and `sizing.py` never import presentation;
+  `menu.py` and `__main__.py` are the adapters.
+- **One compose run per workflow.** `docker compose -f <file> run --rm
+  <service>` from the workflow's working directory; never `docker run`, never
+  a build. Sequential only; parallel runs need a plan.
+- **Stream, don't buffer.** Read stdout and stderr line by line, forward each
+  to its terminal stream, and write both to `reports/logs/k6-<workflow>.log`.
+  Only stdout `[DATA <dataset>]` lines for opted-in datasets are data; they
+  are column-checked into a temp sibling and published atomically after a zero
+  exit with ≥ 1 row.
+- **Exit codes propagate.** CLI exit = the child's code (first non-zero in a
+  sequence). Never swallow one.
+- **Evidence always.** Every `run` writes `reports/state/punch-run.json`, on
+  failure too. Schema: [validation.md](../../docs/workflows/validation.md).
+- **Explicit paths.** `pathlib.Path` anchored to `REPO_ROOT` or the workflow's
+  working directory; no `os.getcwd()`.
+- **Bash stays thin.** `bin/punch` execs `python3 -m punch`; no logic.
+- **Prompts are scoped.** Interactive input only on a TTY: the menu, the
+  data-source and producer pickers, the menu's Docker-run and dataset-write
+  confirmations, and the consumed-data delete prompt. `--no-input` and
+  non-TTY runs never block.
+- **No new subcommand without a plan.** It changes the public CLI.
 
 ## Tests
 
-`python3 -m punch --help` and dry `doctor` = smoke tests. Heavier
-tests deferred till CLI grow beyond small command set.
-
-## Streaming subprocess pattern
-
-The canonical execution implementation lives in `src/punch/execution.py`.
-It uses line-buffered text streams and independent stdout/stderr readers. The
-only output parsing is the workflow-declared `[DATA <dataset>]` stdout
-contract: tagged records for opted-in datasets are validated against the
-declared columns and collected in order; console summaries never control
-execution. Each dataset is written to a temporary sibling and atomically
-published only after a zero exit code and at least one valid record. Sequential execution is
-the contract; parallel runs require a Plan.
+`PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'` — one
+`tests/test_<module>.py` per engine module, plus CLI, CI-contract, and
+workflow-coverage tests.

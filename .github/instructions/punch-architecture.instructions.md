@@ -4,39 +4,41 @@ description: Cross-cutting architectural boundaries that apply to every change i
 ---
 # Punch Architecture — Path Instructions
 
-Scope: **every file**. Always-on architectural contract. Visual layer map: see [`docs/architecture/punch-boundaries.md`](../../docs/architecture/punch-boundaries.md).
+Always on. Layer diagram:
+[`docs/architecture/punch-boundaries.md`](../../docs/architecture/punch-boundaries.md).
 
 ## Ownership
 
 | Layer | Owns | Lives in |
 |---|---|---|
-| Bash wrapper | route shell calls to Python | `bin/punch`, `bin/*` |
-| Punch engine | reusable YAML loading, launch, streaming, dataset harvesting and preflight, evidence | `src/punch/**` |
-| Docker Compose | services as runtime boundaries, image names, ports, env, healthchecks, volumes | `docker-compose.yml` |
-| Dockerfiles | how each service built | `docker/*.Dockerfile` |
-| Service code | per-service behavior (gateway / catalog / orders) | `src/services/**` |
-| Consumer workload | workflow YAML plus k6 scenarios, thresholds, `handleSummary`, checks | consumer repository `workflows/**/*.yaml`, `src/tests/**` |
-| Artifacts / reports | contract between runtime and downstream consumers | `reports/**` |
+| Bash wrapper | routing shell calls to Python | `bin/punch`, `bin/*` |
+| Punch engine | YAML loading, catalog, data/sizing plans, launch, streaming, dataset preflight and harvesting, evidence | `src/punch/**` |
+| Docker Compose | services, image names, ports, env, healthchecks, volumes | `docker-compose.yml` |
+| Dockerfiles | how each service is built | `docker/*.Dockerfile` |
+| Service code | gateway / catalog / orders behavior | `src/services/**` |
+| Consumer workload | workflow YAML, k6 scenarios, thresholds, `handleSummary`, checks | consumer `workflows/**/*.yaml`, `src/tests/**` |
+| Artifacts | contract between runtime and readers | `reports/**` |
 
 ## Rules
 
-- **Python owns orchestration.** Anything deciding *what to run, what order, what evidence* lives in `src/punch/`. Bash and k6 no.
-- **Consumer workloads stay consumer-owned.** Consumer repositories own workflow YAML and k6 scripts. Punch owns the reusable `src/punch/` engine; this repository may carry bundled fixture workflows and examples, but they do not transfer workload ownership to Punch.
-- **Docker Compose owns runtime boundaries.** Service names, ports, env vars, dependencies, volumes = contracts. Renames cascade.
-- **k6 owns test behavior only.** k6 no start containers, no poll state, no write outside `/reports/`.
-- **Bash thin wrapper.** bin script that branches on output or computes pass/fail belongs in Python.
-- **Reporting product contract.** Artifact paths (`reports/state/punch-run.json`, HTML reports, JSON summaries, `reports/logs/`) stable. Renames or schema changes need Plan naming every consumer.
-- **CI/CD external.** `.github/workflows/` consumes Punch; Punch no extend own ownership into CI. Workflow edits out of scope for Build unless Plan explicitly authorizes.
+- **Python owns orchestration.** What to run, in what order, with what
+  evidence lives in `src/punch/`, never in Bash or k6.
+- **Consumer workloads stay consumer-owned.** Consumer repositories own workflow YAML and k6 scripts. Punch owns the reusable `src/punch/` engine; this repository's bundled workflows and tests are fixtures.
+- **Compose owns runtime boundaries.** Service names, ports, env vars,
+  dependencies, and volumes are contracts; renames cascade.
+- **k6 owns test behavior only.** No containers, no polling, no writes
+  outside `/reports/`.
+- **Artifact paths are stable.** Renaming or reshaping
+  `reports/state/punch-run.json`, HTML reports, JSON summaries, or
+  `reports/logs/` names every consumer in the same change.
+- **CI is a consumer.** `.github/workflows/` consumes Punch; edit it only
+  when the change asks for it.
 
-## Anti-patterns to flag in Review
+## Flag in review
 
 1. k6 test code that starts containers or shells out.
 2. Bash that parses subprocess output to decide control flow.
-3. compose service rename without dependents grep.
-4. subprocess call from Python running k6 directly (skipping compose).
-5. Build touching Python + compose + k6 in one diff without Plan that authorized integration.
-6. reporting file path or schema change without updating its consumers.
-
-## When this file activates
-
-Always. Global contract every other instruction file refines.
+3. A Compose service rename without a dependents grep.
+4. Python running k6 directly instead of through Compose.
+5. Engine + Compose + k6 in one diff without a stated integration reason.
+6. An artifact path or schema change without updating its consumers.

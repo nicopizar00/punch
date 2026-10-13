@@ -1,27 +1,21 @@
 ## Summary
 
-Describe the change and why it is needed.
-
-## Changes
-
-- What changed
-- Why
+What changed and why.
 
 ## How to verify
 
 Per the [evidence matrix](../docs/workflows/validation.md):
 
-- **Runtime-affecting change** — install the pinned PyYAML runtime with `python3 -m pip install -r requirements.txt`, then run `./bin/punch run smoke`. Files to check: reports/* and reports/state/punch-run.json (`passed: true` gates the change).
-- **Documentation-only change** — no runtime run expected; verify via diff review.
+- **Runtime-affecting** — install the pinned PyYAML runtime
+  (`python3 -m pip install -r requirements.txt`), run `./bin/punch run smoke`
+  (or the affected workflow), and check `reports/state/punch-run.json` shows
+  `"passed": true`.
+- **Documentation-only** — diff review; no run expected.
 
 ## Checklist
 
-- [ ] Runtime-affecting: explicitly installed pinned PyYAML requirements, ran `./bin/punch run smoke` through Docker Compose (no host `npm`/`k6` required), artifacts produced in `reports/`, `reports/state/punch-run.json` shows `passed: true` — **or** Documentation/Copilot-only: no Build step needed, `punch-ai-governance` ran clean
-- [ ] If `src/tests/` changed: dist bundles and CI steps updated
+- [ ] Evidence for the change class above (no host `npm`/`k6` on the evidence path)
+- [ ] If `src/tests/` changed: `package.json` build entries and `workflows/k6/` updated
 - [ ] If schema or DB changed: migration/seed steps included
-- [ ] Docs updated (README / CHANGELOG.md) when behavior or public interfaces change
-- [ ] Change is small and focused (one feature / fix per PR)
-
-## Notes for reviewers
-
-Add any context or areas you want reviewers to focus on.
+- [ ] README / CHANGELOG updated when behavior or a public interface changes
+- [ ] One feature or fix

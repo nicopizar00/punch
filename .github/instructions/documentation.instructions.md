@@ -4,29 +4,28 @@ description: Behavior rules for repository documentation.
 ---
 # Documentation — Path Instructions
 
-Scope: `README.md`, everything under `docs/`.
+Scope: `README.md` and `docs/`.
+
+## Where things live
+
+| Content | Home |
+|---|---|
+| What Punch is, commands, flags, workflow YAML | `README.md` |
+| Components, contracts, decisions, reproduction | `docs/architecture/reference-architecture-and-implementation-guide.md` |
+| Layer ownership | `docs/architecture/punch-boundaries.md` |
+| Evidence and artifact schema | `docs/workflows/validation.md` |
+| Decisions | `docs/decisions/NNNN-<topic>.md` |
+| Feature specs | `docs/specs/spec-<topic>.md` |
+| Always-on AI rules | `.github/copilot-instructions.md` |
 
 ## Rules
 
-- **README is a doorway, not a manual.** Explain what Punch is, shortest local
-  run, link into `docs/`. Detail go elsewhere.
-- **The always-on rules live in `.github/copilot-instructions.md`.** Move a
-  rule there, never duplicate it.
-- **No duplication.**
-  - Architecture: `docs/architecture/reference-architecture-and-implementation-guide.md`
-    (solution, decisions, reproduction) + `docs/architecture/punch-boundaries.md`
-    (ownership layers).
-  - Decisions: `docs/decisions/`.
-  If you'd repeat content, link instead.
-- **AI-friendly structure.** Tables for catalogs, headings for navigation,
-  explicit file paths so LLM resolve references without guessing.
-- **No essays.** Terse lists over paragraphs. Section past ~40 lines, consider
-  split.
-- **No marketing language.** Describe what project does, not how great it is.
-
-## When adding a new doc
-
-- Place under right subtree (`architecture/`, `ai/`, `workflows/`,
-  `validation/`).
-- Add one line to the `README.md` pointer section.
-- Delete or merge replaced doc in same change.
+- **Link, don't repeat.** One home per fact.
+- **Terse.** Tables for catalogs, headings for navigation, explicit file
+  paths. Split a section past ~40 lines.
+- **No marketing.** Say what it does.
+- **Prose follows code.** When docs and tested behavior disagree, fix the
+  docs or make a tested contract change.
+- **Retire, don't accumulate.** Delete a replaced doc in the same change;
+  executed implementation plans are not kept.
+- A new doc gets one line in the README docs table.

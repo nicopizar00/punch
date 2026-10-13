@@ -1,172 +1,81 @@
 # k6-ts-docker
 
-A didactic performance testing playground for k6 written in TypeScript, packaged in Docker, and executed via GitHub Actions. It includes a small multi-service reference application so that realistic testing patterns — health smoke, performance gate, create-read journey — can be demonstrated end-to-end.
+Punch turns one declarative workflow YAML into one Docker Compose run of k6.
+This repo also holds TypeScript k6 tests and a small reference app
+(gateway, catalog, orders, Postgres) so the pipeline runs end to end, locally
+and in GitHub Actions. Usage and flags: [README](README.md).
 
-## Purpose
-
-Show how to build and run a Docker First k6 test suite against a realistic (but minimal) multi-service target, from local execution through GitHub Actions artifact collection.
-
-Long-term goal: evolve into a reusable GitHub Actions-based performance gate that other service teams can consume without owning the pipeline internals.
+Long-term goal: a reusable performance gate other teams consume without owning
+the pipeline internals.
 
 ## Execution chain
 
-The project follows a single, linear pipeline. Every change should preserve it:
+    TypeScript source  →  esbuild (k6.Dockerfile builder stage)  →  k6 image  →
+    k6 run (one docker compose run per workflow)  →  reports/
 
-    TypeScript source  →  esbuild (in builder stage)  →  Docker image  →
-    k6 execution       →  reports (JSON / HTML / state)
+Every change preserves this chain. If a change does not fit it, stop and
+discuss.
 
-If a proposed change does not fit this chain, stop and discuss before adding it.
+## Layout
 
-## Tech stack
-
-- **k6** — load testing runtime (executes the bundled JS).
-- **TypeScript** — author tests with types and editor support.
-- **esbuild** — bundles TypeScript to one ES module per test file. Runs inside the Docker build stage; not required on the host.
-- **Docker / Docker Compose** — primary interface. Multi-stage build handles bundling and execution.
-- **Python 3 + pinned PyYAML, simple-term-menu, and rich** — thin orchestration façade at `bin/punch` (entry point) and `src/punch/` (CLI module). Docker, Python 3.10+, and pinned requirements are host prerequisites; outside YAML loading and the interactive menu, orchestration stays standard-library based.
-- **GitHub Actions** — builds, runs the full test suite, collects artifacts, validates artifact transfer between jobs.
-- **Postgres 16** — persistence for the orders reference service. Schema seeded via `docker/postgres/init.sql`.
-- **pg** — Postgres client used only by `orders-api`, installed inside its Docker image.
-
-## Project structure
-
-    .
-    ├── CLAUDE.md
-    ├── README.md
-    ├── package.json               # TypeScript + esbuild deps only
-    ├── tsconfig.json
-    ├── src/
-    │   ├── services/
-    │   │   ├── gateway/server.js  # BFF gateway, proxies catalog + orders
-    │   │   ├── catalog/server.js  # read-only product catalog (in-memory)
-    │   │   └── orders/
-    │   │       ├── server.js      # create/read orders via Postgres
-    │   │       └── package.json   # pg dependency (orders only)
-    │   ├── tests/
-    │   │   ├── smoke.ts                  # health smoke across all services
-    │   │   ├── catalog-gate.ts           # performance gate for catalog reads
-    │   │   ├── order-journey.ts          # create → read → validate journey
-    │   │   ├── browser-smoke.ts.example  # deferred k6 Browser placeholder
-    │   │   └── support/
-    │   │       └── report.ts             # shared HTML report builder
-    │   └── punch/                        # Python orchestrator with pinned requirements
-    │       ├── __init__.py
-    │       ├── __main__.py               # argparse CLI; streams docker compose
-    │       ├── menu.py                   # `punch menu` interactive workflow picker
-    │       ├── data_plan.py              # data-source + producer pickers before Docker (stdlib-only)
-    │       ├── sizing.py                 # size a producer run for a target's rows (stdlib-only)
-    ├── dist/                             # bundled k6-ready JS (gitignored)
-    ├── reports/                          # k6 output (gitignored)
-    │   ├── state/                        # machine-readable state files
-    │   └── logs/                         # Docker service logs
-    ├── docker/
-    │   ├── gateway.Dockerfile
-    │   ├── catalog.Dockerfile
-    │   ├── orders.Dockerfile
-    │   ├── k6.Dockerfile
-    │   └── postgres/
-    │       └── init.sql
-    ├── docker-compose.yml                # all services + k6 in one file
-    ├── bin/
-    │   ├── punch                         # Python orchestrator entry point
-    │   ├── build
-    │   ├── test-smoke
-    │   ├── test-gate
-    │   ├── test-journey
-    │   ├── test-suite
-    │   └── clean
-    ├── docs/
-    │   ├── architecture/
-    │   │   ├── reference-architecture-and-implementation-guide.md
-    │   │   └── punch-boundaries.md       # layered ownership map
-    │   ├── decisions/                    # ADRs (0001 host-npm exception, 0005 workflow YAML)
-    │   └── workflows/
-    │       └── validation.md
-    └── .github/
-        ├── copilot-instructions.md       # always-on global Copilot rules
-        ├── instructions/                 # path-specific behavior rules
-        └── workflows/
-            └── k6.yml
-
-Anything not listed here needs justification before being added.
+| Path | Holds |
+|---|---|
+| `bin/punch` | Shell shim → `python3 -m punch` |
+| `bin/*` | Legacy wrappers over `punch run` / `docker compose` |
+| `src/punch/` | Engine: `__main__` (CLI, evidence), `workflow` (strict loader), `catalog` (dataset links), `data_plan` (pickers, pure), `sizing` (pure), `execution` (compose run, streams, datasets), `menu` (terminal UI) |
+| `src/tests/` | k6 TypeScript; `support/report.ts` builds HTML + JSON summaries |
+| `src/lib/`, `src/utils/`, `src/types/` | k6 helpers behind the `@lib` / `@utils` / `@app-types` aliases |
+| `src/services/` | Reference app (Node; dependencies install inside Docker) |
+| `workflows/k6/` | Bundled workflow YAML (fixtures; consumers own their own) |
+| `tests/` | Python `unittest` suite for the engine and CI contract |
+| `docker/`, `docker-compose.yml` | Images and the single compose file |
+| `scripts/k6-wrapper.sh` | Container entrypoint helper |
+| `environment/` | Per-service default target hosts for the menu |
+| `docs/` | Architecture, decisions (ADRs), specs, validation |
+| `dist/`, `reports/` | Generated, gitignored |
 
 ## Rules
 
-1. **Docker First.** Docker is the primary interface for building, running, and
-   validating the project. The host requires Docker, Python 3.10+, and pinned
-   Python requirements — no Node or k6.
-   `npm`/bundler/`pg` invocations happen inside Docker build stages and are
-   implementation details, not user-facing commands. The Python orchestrator
-   is a thin façade that shells out to `docker compose`; it adds no execution
-   semantics of its own.
-   **One scoped exception:** performance-test authoring work may
-   run host `npm`/`pnpm`/esbuild/lint — and host `k6` for the `npm run smoke:local`
-   smoke pre-check — while *authoring* the k6 TS test toolchain
-   ([ADR 0001](docs/decisions/0001-perf-engineer-host-npm.md)). This is an
-   *authoring/maintenance* convenience off the evidence path; the shipped
-   chain still bundles in `docker/k6.Dockerfile`, and `smoke:local` is not the
-   evidence path. It does not apply to runtime-subsystem work, which stays
-   Docker-first with its explicitly installed Python runtime.
-2. **Small, reviewable steps.** Each change must be understandable in one
-   sitting. Prefer multiple small PRs over one large one.
-3. **No unnecessary dependencies.** Every dependency must earn its place. If
-   the standard library or a few lines of code suffice, use those.
-4. **No premature abstraction.** Three similar lines are better than a clever
-   helper. Wait for the third real use case before extracting.
-5. **Preserve the execution chain.** Source → bundle → image → run → report.
-   Don't shortcut or branch it.
-6. **AI-friendly.** File names, directory layout, and scripts should be
-   self-describing. Avoid hidden conventions.
-7. **Don't implement ahead of the plan.** Follow the agreed step list; flag
-   anything that requires going beyond it.
+1. **Docker first.** Host needs Docker, Python 3.10+, and the pinned
+   `requirements.txt` (PyYAML, simple-term-menu, rich) — no Node, no k6.
+   `npm`, esbuild, and `pg` run inside Docker build stages. One scoped
+   exception: while authoring the k6 TypeScript toolchain, host
+   `npm`/esbuild/lint and `npm run smoke:local` are allowed; they are never
+   the evidence path ([ADR 0001](docs/decisions/0001-perf-engineer-host-npm.md)).
+2. **Thin façade.** Punch shells out to `docker compose run --rm`; it adds no
+   execution semantics, never builds images, never installs dependencies.
+   Outside YAML loading and the menu, the engine is standard library only.
+3. **Evidence.** A runtime change is done when `./bin/punch run <workflow>`
+   writes `reports/state/punch-run.json` with `"passed": true`. Doc-only
+   changes need diff review only. See
+   [validation.md](docs/workflows/validation.md).
+4. **Layer ownership.** One owning layer per change; a crossing must say why.
+   See [punch-boundaries.md](docs/architecture/punch-boundaries.md).
+5. **Small, reviewable steps.** Follow the agreed plan; flag anything beyond
+   it.
+6. **No unnecessary dependencies, no premature abstraction.** Three similar
+   lines beat a clever helper.
+7. **Self-describing.** Names, layout, and scripts explain themselves; no
+   hidden conventions.
 
-## Common commands
+## Commands
 
-Preferred entry point (Python orchestrator):
+```bash
+python3 -m pip install -r requirements.txt
+docker compose build
+./bin/punch doctor
+./bin/punch run smoke                     # or gate | journey | all | path.yaml
+./bin/punch run all --collect-logs
+./bin/punch menu [workflows-dir]
+./bin/punch clean
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
+```
 
-- `./bin/punch doctor` — confirm host prerequisites.
-- `python3 -m pip install -r requirements.txt` — install the pinned host runtime before `punch run`.
-- `./bin/punch run smoke` — run health smoke test; results in `reports/`.
-- `./bin/punch run gate` — run catalog performance gate.
-- `./bin/punch run journey` — run order create-read journey.
-- `./bin/punch run all --collect-logs` — full suite + collect service logs.
-- `./bin/punch menu [workflows-dir]` — interactively pick and run one workflow
-  YAML from a directory (defaults to this repo's bundled `workflows/k6/`); a
-  consumer repo passes its own workflows directory.
-- `./bin/punch clean` — tear down containers and volumes.
+## Notes for AI assistants
 
-Legacy bash equivalents (still supported, will be retired once the
-Python CLI reaches feature parity):
-
-- `./bin/build`, `./bin/test-smoke`, `./bin/test-gate`, `./bin/test-journey`,
-  `./bin/test-suite`, `./bin/clean`.
-
-## For AI assistants
-
-- Read this file first, then `docs/architecture/punch-boundaries.md`.
-- **GitHub Copilot is the primary host;** `.github/copilot-instructions.md`
-  and `.github/instructions/` are the AI config.
-- Before adding files, dependencies, or abstractions, confirm they fit the
-  execution chain and the structure above.
-- `src/services/` contains Node.js services for the reference application.
-  They run inside Docker — the host never installs their dependencies.
-- `src/tests/` contains k6 TypeScript. esbuild bundles each test file into
-  `dist/`. The support module is bundled into each test, not a separate
-  output. `browser-smoke.ts.example` is a deferred placeholder — do not
-  build it.
-- `src/punch/` is the Python orchestrator with pinned YAML/menu dependencies. `src/punch/execution.py`
-  owns launch, separate stdout/stderr logs, dataset harvesting, and consumer
-  preflight; `src/punch/catalog.py` cross-validates `spec.data` links;
-  other orchestration is standard-library based. Definitions live in
-  `workflows/k6/*.yaml`; one workflow is one Compose run and `punch run` does
-  not build images. A dataset is written only with `--produce <dataset>`;
-  consumers fail before Docker until their datasets exist. On a TTY,
-  `src/punch/data_plan.py` first offers optional-dataset sources and, for
-  missing data, a producer to run instead (still one Compose run);
-  `--no-input` skips the pickers. `src/punch/sizing.py` sizes a producer for
-  a target from `spec.sizing` (menu options mode, `--size-for`).
-- A change is not "done" until `reports/state/punch-run.json` records the
-  Test run. See `docs/workflows/validation.md`.
-- Propose changes in small, reviewable steps. Do not implement a full feature
-  in one pass unless explicitly asked.
+- GitHub Copilot is the primary host: `.github/copilot-instructions.md` and
+  `.github/instructions/` are its config.
+- `tests/test_ci_contract.py` pins phrases in ADR 0001, `punch-boundaries.md`,
+  `.github/instructions/`, and the PR template; keep them when editing.
+- `browser-smoke.ts.example` is a deferred placeholder; do not build it.
 - When in doubt, ask.

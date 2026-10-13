@@ -1,154 +1,94 @@
-# Validation Workflow
+# Validation
 
-A change is not "done" until it has produced **validation evidence**. This
-file specifies what evidence looks like and how to produce it.
+A change is done when it has produced the evidence its class requires.
 
-## Evidence matrix (canonical — link here, don't restate)
+## Evidence matrix
 
-Every change falls into exactly one class. This is the single source of
-truth Rules 3/13, Review, Ship, the review skill, and the PR template all
-point back to instead of each re-asserting "evidence mandatory."
+| Change class | Touches | Required evidence |
+|---|---|---|
+| **Runtime-affecting** | `src/**`, `docker/**`, `docker-compose.yml`, `bin/**`, `workflows/**`, `.github/workflows/**`, or any runtime/artifact contract | `./bin/punch run <workflow>` → `reports/state/punch-run.json` with `"passed": true` |
+| **Documentation-only** | `*.md`, `docs/**`, `.github/instructions/**` with no contract impact | Diff review and a link check; no run expected |
 
-| Change class | Touches | Build? | Required evidence |
-|---|---|---|---|
-| **Runtime-affecting** | `src/**`, `docker/**`, `docker-compose.yml`, `bin/**`, `.github/workflows/**`, or anything with a runtime/artifact contract | Yes | `./bin/punch run <test>` → `reports/state/punch-run.json` (`passed: true`) |
-| **Documentation-only** | `README.md`, `docs/**`, `.github/instructions/**`, `copilot-instructions.md` — no runtime-contract impact | No | Diff review + local link check. No `reports/state/punch-run.json` — none was produced, and none is expected. |
+A change that mixes both is runtime-affecting.
 
-A change that mixes both classes (e.g. a doc update that also changes a
-runtime contract) is Runtime-affecting for evidence purposes.
+## Run evidence: `reports/state/punch-run.json`
 
-## Evidence contract (Runtime-affecting class)
-
-Every Verify run writes a single canonical artifact:
-
-```
-reports/state/punch-run.json
-```
-
-Schema (informal — produced by `src/punch/__main__.py`):
+Written by `src/punch/__main__.py` on every `punch run`, pass or fail. The
+menu prints results to the terminal and writes no evidence.
 
 ```json
 {
   "command": "run",
-  "tests": ["smoke", "gate", "journey"],
+  "tests": ["smoke", "gate", "journey", "bff-checkout-journey"],
   "results": [
     {"test": "smoke", "workflow": "workflows/k6/smoke.yaml", "exitCode": 0,
-     "passed": true, "failure": null, "datasets": []}
+     "childExitCode": 0, "passed": true, "failure": null, "datasets": []}
   ],
   "exitCode": 0,
   "passed": true,
-  "startedAt": "<ISO-8601 UTC timestamp>",
+  "startedAt": "<ISO-8601 UTC>",
   "durationSeconds": 78.3
 }
 ```
 
-`failure` and `datasets` (`dataset`, `path`, `recordCount`, `published`) are
-per-workflow evidence fields. They make missing data, child-process failures,
-and published row counts auditable without treating a prior data file as proof
-of this run.
+Per result:
 
-Optional per-result keys:
-
-- `switchedFrom` (`["<workflow>", ...]`) — present only when a producer pick
-  replaced the selected workflow; lists the workflows left behind, in order.
-- `dataSources` (`{"<dataset>": "default" | "<path>"}`) — present when the
-  workflow declares datasets it reads; each one's path relative to the working
-  directory, or `"default"` when the scenario used its built-in data.
-- `config` — the k6 options JSON passed as `k6 run --config` (relative to
-  the working directory when beneath it); absent when no config was passed.
-- `sizing` — present when `--size-for` sized the run: `target`, `datasets`,
-  `shape` (the target config's `executor`, `vus`, and `iterations` or
-  `duration`), `preset` (the target config's file stem, or `null` when no
-  config was given), `rowsNeeded`, `margin`, `producerIterations`,
-  `producerVus`, `producedRows` (`{"<dataset>": <count>}`), and `short`
-  (`true` when a sized dataset has fewer rows than `rowsNeeded`).
-
-## Host setup and workflow selection
-
-Docker, Python 3.10+, and the pinned requirements are prerequisites. Install
-and build explicitly; `punch run` does neither. Execution definitions live in
-`workflows/k6/*.yaml`, and one selected workflow produces one explicit Compose
-run.
-
-```bash
-python3 -m pip install -r requirements.txt
-docker compose build
-./bin/punch run smoke
-./bin/punch run path/to/workflow.yaml
-./bin/punch run path/to/producer.yaml --produce orders
-```
-
-Datasets are optional and declared in `spec.data`. A producer's
-`[DATA <dataset>]` stdout records are written to `<directory>/<dataset>.csv`
-(header from `columns`) only with `--produce <dataset>`, and published
-atomically only after success. A consumer fails before Docker when a required
-dataset has no rows. In a terminal, `punch run` and the `punch` menu settle
-data before Docker: each optional dataset offers its sources (built-in default
-or its data file, cursor on default); then, for a dataset the run reads that has
-no rows, an arrow-key list of every producer opens, the `recommended: true` one
-labeled and preselected and producers missing required environment tagged
-`needs <VAR>`. `punch run` runs the picked producer with `--produce <dataset>`
-and the menu continues as for a direct pick (asking before writing) — still
-one Compose run — and the walk continues when it is missing data too; the
-closing hint names the workflow to re-run and what it still misses, and
-`switchedFrom` records the replaced workflow. Esc cancels. Non-interactive
-equivalents: `--no-input`, `--data <dataset>=default`,
-`--data <dataset>=<path>`, or running the producer with `--produce`. A
-producer can instead be sized for a target with `spec.sizing` — the menu's
-`Size for a target workflow` mode or `punch run <producer> --size-for <target>`
-— which prints the estimate, writes the sized datasets, and warns when fewer
-rows came out than the target needs. The bundled workflows declare no data, so
-the default CI command remains `./bin/punch run all`.
-
-In addition, each test writes its own evidence under `reports/`:
-
-| Test | Artifacts |
+| Key | Meaning |
 |---|---|
-| smoke   | `smoke-report.html`, `smoke.json` |
-| gate    | `catalog-gate-report.html`, `catalog-gate.json` |
-| journey | `order-journey-report.html`, `order-journey.json`, `state/test-context.json` |
+| `exitCode` | Effective code: the child's, or `1` for a failure before Docker |
+| `childExitCode` | The k6 container's code; `null` when no container started |
+| `failure` | Why it failed (`null` on success) |
+| `datasets` | `dataset`, `path`, `recordCount`, `published` per produced dataset |
+| `skipped` | `true` when `all` skipped the workflow for missing required environment |
+| `switchedFrom` | Workflows a producer pick replaced, in order |
+| `dataSources` | `{"<dataset>": "default" \| "<path>"}` for each dataset read |
+| `config` | k6 options JSON passed as `--config`; absent when none |
+| `sizing` | With `--size-for`: `target`, `datasets`, `shape`, `preset`, `rowsNeeded`, `margin`, `producerIterations`, `producerVus`, `producedRows`, `short` |
 
-When `--collect-logs` is set, `reports/logs/{gateway,catalog,orders,postgres}.log`
-are also written.
+The last five appear only when they apply. A data file left by an earlier run
+is not evidence for this one.
 
-## How to validate the MVP locally
+## Other artifacts
+
+| Path | Written by |
+|---|---|
+| `reports/logs/k6-<workflow>.log` | Punch: the k6 container's stdout and stderr |
+| `reports/<script>-report.html`, `reports/<script>.json` | Each k6 script's `handleSummary` (`smoke`, `catalog-gate`, `order-journey`, `bff-checkout-journey`) |
+| `reports/state/test-context.json` | `order-journey`, `bff-checkout-journey` |
+| `reports/state/k6-config-<producer>.json` | Punch, for a sized producer run |
+| `reports/logs/{gateway-api,catalog-api,orders-api,postgres}.log` | Punch, with `--collect-logs` |
+
+## Validate locally
 
 ```bash
-bin/punch doctor              # Confirm host has docker + python
-bin/punch run smoke           # Fastest signal that the stack is healthy
-bin/punch run all --collect-logs
-cat reports/state/punch-run.json
+./bin/punch doctor
+./bin/punch run smoke
+./bin/punch run all --collect-logs
+cat reports/state/punch-run.json        # "passed": true
 ```
 
-The final `cat` must show `"passed": true`.
+`all` skips `bff-checkout-journey` unless `TARGET_BASE_URL` is set.
 
-## How to validate failure behavior
+Failure path:
 
 ```bash
-TARGET_BASE_URL=http://does-not-exist.invalid bin/punch run smoke || echo "FAILED as expected"
-cat reports/state/punch-run.json
+TARGET_BASE_URL=http://does-not-exist.invalid ./bin/punch run smoke || echo "failed as expected"
+cat reports/state/punch-run.json        # "passed": false, non-zero exitCode
 ```
 
-The artifact must show `"passed": false` and a non-zero exit code. If the
-artifact is missing, the orchestrator violated the "evidence first" rule.
+If `punch-run.json` is missing, the change has not been verified.
 
-## How CI re-validates
+## CI
 
-The GitHub Actions workflow at `.github/workflows/k6.yml` runs the full
-suite, collects logs, uploads `reports/` as the `performance-suite-reports`
-artifact, then a second job validates the artifact contents are present.
+`.github/workflows/k6.yml` installs `requirements.txt`, runs the Python unit
+suite, builds images, runs `./bin/punch run all`, collects service logs, and
+uploads `reports/` as `performance-suite-reports`. A second job,
+`validate-artifacts`, downloads that artifact without live containers and
+fails if an expected file is missing. `tests/test_ci_contract.py` pins the
+first job's step order.
 
-This proves the local validation contract and the CI validation contract
-produce the same evidence.
+## Not evidence
 
-CI first runs `python -m pip install -r requirements.txt` and the direct
-Python unit suite, then builds images and invokes `./bin/punch run all`.
-
-## What evidence is NOT
-
-- A green local terminal alone (transient, not auditable).
-- A passing unit test in isolation (does not exercise the stack).
-- A PR description claim ("I ran it and it worked").
-
-If `reports/state/punch-run.json` does not exist, the change has not been
-verified.
+- A green terminal alone.
+- A passing unit test alone (it does not exercise the stack).
+- A claim in a PR description.

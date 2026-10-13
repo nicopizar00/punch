@@ -99,8 +99,9 @@ A preflight failure has no child exit code; a child failure keeps its code.
   workflows sequentially; chains stay operator- or CI-controlled.
 - **Preflight before Docker:** required environment, required data, valid
   `--produce`, output-path collisions.
-- **Streams:** stdout and stderr read concurrently into separate logs; only
-  tagged stdout lines are data.
+- **Streams:** stdout and stderr read concurrently and forwarded to their
+  matching terminal streams; both go to `reports/logs/k6-<workflow>.log`.
+  Only tagged stdout lines are data.
 - **Publication:** opt-in (`--produce <dataset>`). Rows are column-checked into
   a same-directory temp file and atomically replace the target only after a
   successful run with ≥ 1 valid row; otherwise the previous file survives.

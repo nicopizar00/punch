@@ -34,3 +34,11 @@ no output-data confirmation.
   data; human-oriented console summaries are not an artifact contract.
 - Native k6 CSV output, because the workflow-declared, path-configured
   publication contract is owned by Punch.
+
+## Later changes
+
+- Host runtime also pins `simple-term-menu` and `rich` for `punch menu`.
+- `[CSV]` records became named datasets (`spec.data`): producers print
+  `[DATA <dataset>]` on stdout, and a dataset is written only with
+  `--produce <dataset>` instead of a confirmation prompt. Publication stays
+  atomic. Contract: [README](../../README.md#datasets).

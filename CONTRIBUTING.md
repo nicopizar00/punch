@@ -1,42 +1,20 @@
 # Contributing to k6-ts-docker
 
-Thanks for wanting to contribute. Follow these lightweight rules to keep changes reviewable.
-
 ## Getting started
 
-1. Install Docker and Python 3 (>=3.10). No Node or k6 is required on the host.
-2. Install the pinned Punch runtime with `python3 -m pip install -r requirements.txt`.
-3. Run `./bin/punch doctor` to confirm your environment.
-4. Use a feature branch named `ai-ready/*` or `feature/*`.
+1. Install Docker and Python 3.10+. No Node or k6 on the host.
+2. `python3 -m pip install -r requirements.txt`
+3. `./bin/punch doctor`
+4. Branch from `main` as `feature/*` or `fix/*`.
 
-## Branch and PR rules
+## Pull requests
 
-- Target the default branch (`main`) via a pull request from a feature branch.
-- Keep PRs small and focused. Each PR should include a verification step in the description.
-- Use the provided issue and PR templates.
+- Target `main`. One feature or fix per PR.
+- Use the issue and PR templates.
+- Include how to verify. Runtime changes need `./bin/punch run smoke` (or the
+  affected workflow) with `reports/state/punch-run.json` showing
+  `"passed": true`; doc-only changes need diff review. See
+  [validation.md](docs/workflows/validation.md).
+- Update README / CHANGELOG when behavior or a public interface changes.
 
-## Running and testing locally
-
-```bash
-python3 -m pip install -r requirements.txt
-docker compose build
-./bin/punch run smoke
-./bin/punch run path/to/workflow.yaml
-./bin/punch run path/to/producer.yaml --produce orders
-```
-
-`punch run` performs one Compose run for each selected YAML workflow and never
-builds images. Datasets are declared in `spec.data` (see README); a producer
-writes one only with `--produce <dataset>`, published by
-`src/punch/execution.py` only after success, and a consumer is preflighted
-before Docker. A pre-existing data file does not prove the current run passed.
-Bundled workflows declare no data.
-
-## What to include in PRs
-
-- Short description and how to validate locally
-- Which reports or artifacts changed
-- Reference any docs or AGENTS.md updates
-
-## Contact
-
+Usage and workflow YAML: [README.md](README.md). Rules: [CLAUDE.md](CLAUDE.md).

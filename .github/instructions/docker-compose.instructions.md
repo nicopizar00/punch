@@ -4,79 +4,37 @@ description: Behavior rules for Docker and Docker Compose changes.
 ---
 # Docker & Docker Compose — Path Instructions
 
-Scope: `docker-compose.yml` and all under `docker/`. Compose own runtime boundaries; this file its contract.
+Scope: `docker-compose.yml` and `docker/`.
 
 ## Rules
 
-- **Services are contracts.** Service names, image names, exposed ports,
-  env vars, `depends_on`, healthchecks, volume mounts = public surface. Rename any
-  cascade to k6 tests, orchestrator, CI, docs.
-- **Do not mutate service names casually.** Rename = own Plan with
-  dependents grep + update across `src/tests/`, `src/punch/`,
-  `.github/workflows/`, docs.
-- **Single compose file.** No split into multiple compose files, no
-  profiles unless Plan justify.
-- **Healthchecks gate startup.** Every service has healthcheck.
-  `depends_on: { condition: service_healthy }` only ordering
-  mechanism. No `sleep` loops in bin scripts or orchestrator.
-- **No CMD in Dockerfiles for k6.** Compose `command:` single
-  source of truth for how k6 invoked.
-- **Multi-stage builds for Node services.** Bundling (esbuild) run in
-  builder stage; runtime images carry only artifacts.
-- **Pin `grafana/k6`** to explicit version. Never `:latest`.
-- **No secret bake-ins.** Use env vars passed through
-  compose, never `ARG`s that hardcode credentials.
-- **Volumes are read-only by default.** Only `./reports:/reports`
-  writable. Mounts needing write access must justify in Plan.
-- **Explicit host prerequisites.** A fresh clone requires Docker, Python
-  3.10+, and the pinned PyYAML requirements. Run
-  `python3 -m pip install -r requirements.txt` before `./bin/punch`; do not
-  add host Node or k6 requirements. `punch run` never installs dependencies.
-- **Local reproducibility.** Compose run must be deterministic enough
-  that two contributors get same artifact set from same commit.
+- **Services are contracts.** Service names, image names, ports, env vars,
+  `depends_on`, healthchecks, and mounts are public. A rename is its own
+  change with a dependents grep across `src/tests/`, `src/punch/`,
+  `.github/workflows/`, and docs.
+- **One compose file, no profiles** unless a plan justifies them.
+- **Healthchecks gate startup.** Every service has one;
+  `depends_on: { condition: service_healthy }` is the only ordering
+  mechanism. No `sleep` loops.
+- **k6 image.** The Dockerfile sets `ENTRYPOINT` (`docker/entrypoint.sh` →
+  `scripts/k6-wrapper.sh`) and no `CMD`; Compose `command:` and Punch's
+  `run <script>` decide what runs. `grafana/k6` stays pinned, never `:latest`.
+- **Bundling happens in the builder stage.** `npm run build` (esbuild) in
+  `docker/k6.Dockerfile`; the runtime image copies `dist/` only. A new bundle
+  means a new entry in `package.json` `scripts.build`.
+- **No baked secrets.** Pass env vars through Compose; no credential `ARG`s.
+- **Read-only by default.** Only `./reports:/reports` is writable; any other
+  writable mount needs a stated reason.
+- **Explicit host prerequisites.** Docker, Python 3.10+, and the pinned
+  PyYAML requirements (`python3 -m pip install -r requirements.txt`). No host
+  Node or k6. `punch run` never installs or builds.
+- **Reproducible.** Two contributors on one commit get the same artifact set.
 
-## When the orchestrator changes
+## Contract changes
 
-If `bin/punch` add new test target, this layer change too: add new
-bundle to `docker/k6.Dockerfile` COPY step, ensure compose
-`command:` accept script path. Coordinate via Plan.
+Need a plan and a dependents cascade: renaming a service, changing a
+host-exposed port, removing or weakening a healthcheck, adding a writable
+mount, a major image bump, removing or renaming an env var something reads.
 
-## Service contract template
-
-Every service in `docker-compose.yml` declares:
-
-```yaml
-services:
-  <service-name>:                       # stable, lowercase, kebab-case
-    image: <name>:<pinned-tag>          # never `:latest`
-    container_name: <service-name>      # log clarity
-    build:                              # only if local
-      context: .
-      dockerfile: docker/<service>.Dockerfile
-    ports:
-      - "<host>:<container>"            # only when host needs reachability
-    environment:
-      VAR_NAME: ${VAR_NAME:-default}    # every var is part of the surface
-    depends_on:
-      <other-service>:
-        condition: service_healthy      # never service_started for deps
-    healthcheck:                        # every service has one
-      test: ["CMD", "<lightweight-check>"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
-    volumes:
-      - ./<host-path>:<container-path>:ro   # read-only by default
-    networks:
-      - punch-net
-```
-
-**Contract changes** (need a plan + dependents cascade): renaming a
-service, changing a host-exposed port, removing/weakening a healthcheck,
-adding a writable volume, a major-version image bump, removing/renaming an
-env var another service or `src/tests/` reads.
-
-**Within contract** (normal Build, no separate Plan beyond it): patch-level
-image bumps, tightening a healthcheck interval/timeout, adding an env var
-with a backwards-compatible default.
+Within contract: patch image bumps, tighter healthcheck timing, a new env var
+with a backward-compatible default.

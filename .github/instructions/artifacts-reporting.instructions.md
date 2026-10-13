@@ -4,107 +4,45 @@ description: Contract for artifacts, logs, summaries, and reports produced by Pu
 ---
 # Artifacts & Reporting — Path Instructions
 
-Scope: producer side of every artifact Punch emit (`src/tests/support/`,
-reporting/state code in `src/punch/`), artifact dir
-(`reports/`), validation docs explain it
-(`docs/workflows/validation.md`).
-
-## What counts as an artifact
-
-| Artifact | Path | Producer | Reader |
-|---|---|---|---|
-| Run evidence (machine) | `reports/state/punch-run.json` | `src/punch/__main__.py` | CI validation job, automation |
-| Optional CSV data | workflow-declared path | `src/punch/execution.py` | Explicit downstream consumer |
-| Journey context (machine) | `reports/state/test-context.json` | `src/tests/order-journey.ts` | Subsequent journey assertions |
-| HTML report (per test) | `reports/<test>.html` | `src/tests/support/report.ts` | Humans |
-| JSON summary (per test) | `reports/<test>.json` | k6 `handleSummary` | Humans + automation |
-| Docker logs | `reports/logs/<service>.log` | `src/punch/` with `--collect-logs` | Humans debugging failures |
+Scope: everything that writes under `reports/` (`src/tests/support/`, the
+evidence and logging code in `src/punch/`) and
+[`docs/workflows/validation.md`](../../docs/workflows/validation.md), which
+holds the artifact list and the `punch-run.json` schema. Don't restate them
+here.
 
 ## Rules
 
-- **Stable artifact paths.** The fixed paths above are part of the public
-  contract. Workflow-configured CSV is optional and excluded from that
-  fixed-path count. Rename or split a fixed path = contract change — must
-  update every downstream consumer (CI workflow, this file, docs).
-- **Low-noise terminal output by default.** Terminal show progress
-  and pass/fail, not every line of every container log. Full output
-  go to `reports/logs/` when `--collect-logs` set.
-- **Full logs to files, always.** Even when terminal quiet, log
-  file complete. User debugging failure never need re-run
-  to get missing detail.
-- **JSON summaries are compact and stable-schema.** No raw k6 per-iteration
-  dumps. Summary hold aggregates (counts, thresholds, durations) in
-  shape that survive k6 upgrades.
-- **HTML reports are self-contained.** Single `.html` file per test;
-  no external CSS, no remote fetches, no `file://` assumptions.
-- **State files are the canonical run record.** `passed: true|false` in
-  `reports/state/punch-run.json` = verification gate; HTML for
-  humans, JSON summaries for human inspection or future automation.
-- **Naming convention.** `<test>.html`, `<test>.json` under `reports/`;
-  `<service>.log` under `reports/logs/`. No date stamps or
-  hashes in filenames — break CI validation lookup.
-- **Don't write secrets into artifacts.** Run evidence and JSON summaries
-  must not hold env vars, tokens, or external URLs verbatim.
-- **Datasets are opt-in and atomic.** A workflow declares datasets and
-  columns in `spec.data`; only `[DATA <dataset>]` stdout records of an
-  opted-in (`--produce`) dataset are written, under a header row. The producer
-  writes a temporary sibling and publishes it only after success. A prior data
-  file does not prove the current run succeeded; use current run evidence.
+- **Stable paths.** Artifact paths are a public contract read by CI's
+  `validate-artifacts` job. Renaming or splitting one updates every consumer
+  (CI workflow, validation.md) in the same change.
+- **No dates or hashes in filenames.** They break CI lookup.
+- **Quiet terminal, complete files.** The terminal shows progress and
+  pass/fail; full output always lands in `reports/logs/`, so a failure never
+  needs a re-run for detail.
+- **Compact JSON summaries.** Aggregates (counts, thresholds, durations) in a
+  shape that survives k6 upgrades; no per-iteration dumps.
+- **Self-contained HTML.** One file per script; no external CSS, remote
+  fetches, or `file://` assumptions.
+- **Evidence is canonical.** `passed` in `reports/state/punch-run.json` is the
+  gate; HTML is for humans.
+- **Datasets are opt-in and atomic.** Only `[DATA <dataset>]` stdout lines of
+  a `--produce` dataset are written, under a header row, published only after
+  success. An old data file is not evidence.
+- **No secrets.** Evidence, summaries, and logs never hold tokens, env values,
+  external URLs, or PII; allowlist fields instead of dumping bodies.
 
-## When this file activates
+## Service logging
 
-- Add new artifact.
-- Change schema of existing artifact.
-- Change terminal-vs-file output discipline.
-- Touch `src/tests/support/report.ts` or reporting parts of
-  `src/punch/`.
+The reference services are a demo, so tracing, a metrics backend, and
+alerting are out of scope. Within scope:
 
-## Current artifact schemas
-
-| Artifact | Schema |
-|---|---|
-| `reports/state/punch-run.json` | `{ "command": "run", "tests": [str], "results": [{"test": str, "workflow": str, "exitCode": int, "passed": bool, "failure": str\|null, "datasets": [{"dataset": str, "path": str, "recordCount": int, "published": bool}]}], "exitCode": int, "passed": bool, "startedAt": iso8601, "durationSeconds": number }` |
-| Workflow-declared dataset | Header + ordered `[DATA <dataset>]` stdout records at `<spec.data.directory>/<dataset>.csv`; written only with `--produce` and on successful execution |
-| `reports/state/test-context.json` | `{ "created_order_ids": [str], "created_at": iso8601 }` (see `order-journey.ts` for current shape) |
-| `reports/<test>.html` | Free-form self-contained HTML; structure stable enough to grep for thresholds |
-| `reports/<test>.json` | k6's summary JSON, **filtered** to aggregates (counts, thresholds, durations) — never raw per-iteration data |
-| `reports/logs/<service>.log` | Raw container stdout+stderr, line-ordered |
-
-A change adding, splitting, or moving an artifact fills in a row here (Path /
-Format / Producer / Produced-when / Schema / Read by / Stability /
-Sensitivity, as needed) in the same PR.
-
-## Observability discipline
-
-Punch's reference services are a didactic demo, not a production system with
-on-call — so OpenTelemetry tracing, a separate metrics backend, and
-symptom-based alerting are **out of scope**, deferred until a real recurring
-service use case is approved. The transferable discipline that *is* in scope:
-
-- **Instrument with a question in mind.** Before adding a log line, write 2–4
-  on-call-style questions it answers (e.g. "what fraction of create-order
-  requests fail, and why?"). Telemetry without a question is noise.
-- **Structured logs, not prose.** One JSON object per line, stable event name +
-  machine fields (`{ event: 'order_create_failed', orderId, cause, ms }`), not
-  string interpolation — so it survives into `reports/logs/` and stays
-  greppable next to the k6 evidence. Levels: `error` (invariant broken) ·
-  `warn` (degraded) · `info` (business event) · `debug` (off by default).
-- **Carry a correlation id** from the gateway through catalog/orders so one
-  request can be reconstructed from interleaved logs — an orphan log line
-  (no correlation id) is a red flag.
-- **RED, read from the k6 run.** Rate/Errors/Duration come from the k6 summary
-  (`http_req_duration` p95/p99, `errorRate`, `totalRequests`), never a separate
-  metrics backend. **Percentiles, never averages.**
-- **Never log secrets/tokens/URLs/PII** into any artifact — allowlist fields,
-  don't dump whole request bodies.
-- **Verify the telemetry itself before "done."** Force a failure (e.g. a bad
-  order payload), find the structured `*_failed` event in `reports/logs/` by
-  correlation id, confirm fields are real JSON (not `[object Object]`); run
-  `./bin/punch run journey --collect-logs` and confirm logs line up with
-  `reports/state/punch-run.json`.
-- **The run evidence is the telemetry.** `reports/state/punch-run.json` answers
-  "did it pass?"; `reports/logs/<service>.log` answers "why not?" — keep the split.
-
-**Red flags:** a service path with retries/queries/external hops and zero new
-log events; log lines built by string interpolation; no correlation id;
-latency reported as an average; secrets/full bodies/PII in any log line.
+- Log with a question in mind ("what fraction of create-order requests fail,
+  and why?").
+- One JSON object per line with a stable event name and machine fields
+  (`{ event: 'order_create_failed', orderId, cause, ms }`); levels `error`,
+  `warn`, `info`, `debug` (off by default).
+- Carry a correlation id from the gateway through catalog and orders.
+- Rate, errors, and duration come from the k6 summary — percentiles, never
+  averages.
+- Verify by forcing a failure, then finding its `*_failed` event in
+  `reports/logs/` (`./bin/punch run journey --collect-logs`).

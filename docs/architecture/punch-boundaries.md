@@ -1,12 +1,8 @@
 # Punch — Architectural Boundaries
 
-This document is the authoritative map of **who owns what** in Punch. Every
-prompt, skill, agent, and instruction file in this repo points back here.
-Most "why did this go wrong?" answers map to a boundary crossing.
-
-For the full component model, selection flows, design trade-offs, and independent
-reproduction steps, see the
-[Reference Architecture and Implementation Guide](reference-architecture-and-implementation-guide.md).
+Who owns what. Most "why did this go wrong?" answers map to a boundary
+crossing. Components, contracts, and design decisions:
+[Reference Architecture](reference-architecture-and-implementation-guide.md).
 
 ## Layered ownership
 
@@ -14,105 +10,81 @@ reproduction steps, see the
 ┌──────────────────────────────────────────────────────────────┐
 │ Host                  developer/CI machine                   │
 │   requires:           Docker + Python 3.10+ + requirements   │
-│   never installs:     Node, npm, k6 (Punch setup installs     │
-│                       pinned Python requirements explicitly) │
+│   never installs:     Node, npm, k6                          │
 ├──────────────────────────────────────────────────────────────┤
-│ Bash wrapper          bin/punch (entrypoint), bin/test-*     │
-│   responsibility:     route the shell call to Python         │
+│ Bash wrapper          bin/punch, bin/*                       │
+│   owns:               routing the shell call to Python       │
 │   never owns:         orchestration logic                    │
 ├──────────────────────────────────────────────────────────────┤
-│ Python orchestrator   src/punch/__main__.py + execution.py   │
-│   owns:               argparse, workflow launch, separate    │
-│                       stdout/stderr logs, dataset preflight, │
-│                       harvesting, exit codes, evidence       │
+│ Punch engine          src/punch/**                           │
+│   owns:               CLI, workflow loading, catalog, data   │
+│                       and sizing plans, compose launch,      │
+│                       stream forwarding, k6 log, dataset     │
+│                       preflight and harvesting, exit codes,  │
+│                       evidence                               │
 │   never owns:         Docker semantics, k6 thresholds, the   │
 │                       HTML report shape                      │
 ├──────────────────────────────────────────────────────────────┤
 │ Docker Compose        docker-compose.yml                     │
 │   owns:               services as runtime boundaries, image  │
-│                       names, exposed ports, env vars,        │
-│                       depends_on / healthchecks, volumes     │
+│                       names, ports, env vars, depends_on /   │
+│                       healthchecks, volumes                  │
 │   never owns:         business logic, test code              │
 ├──────────────────────────────────────────────────────────────┤
 │ Docker images         docker/*.Dockerfile                    │
 │   owns:               how each service is built              │
-│   never owns:         service composition (lives in compose) │
+│   never owns:         service composition                    │
 ├──────────────────────────────────────────────────────────────┤
-│ k6 test code          src/tests/*.ts                         │
+│ Reference services    src/services/**                        │
+│   owns:               gateway / catalog / orders behavior    │
+├──────────────────────────────────────────────────────────────┤
+│ k6 test code          src/tests/**                           │
 │   owns:               scenarios, thresholds, handleSummary,  │
 │                       check() calls                          │
-│   never owns:         how the suite is launched, container   │
-│                       lifecycle, artifact collection         │
+│   never owns:         launch, container lifecycle, artifact  │
+│                       collection                             │
 ├──────────────────────────────────────────────────────────────┤
-│ Monitoring /          (deferred — slot reserved)             │
-│ injectables           future Prometheus, OTel, fault         │
-│                       injection containers attach here       │
-│   owns when added:    metric collection, fault scenarios     │
-│   integrates through: docker-compose.yml (new services)      │
-├──────────────────────────────────────────────────────────────┤
-│ Artifacts /           reports/, reports/state/, reports/logs/│
-│ reporting             punch-run.json, test-context.json,     │
-│                       HTML reports, k6 JSON summaries        │
-│   owns:               the *contract* between the runtime and │
-│                       whoever reads results (humans, CI,     │
-│                       dashboards)                            │
+│ Artifacts             reports/, reports/state/, reports/logs/│
+│   owns:               the contract between the runtime and   │
+│                       whoever reads results (humans, CI)     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ## Reusable engine and consumer workloads
 
 Consumer repositories own workflow YAML and k6 scripts. Punch owns the
-reusable `src/punch/` engine, including normalized YAML loading, workflow
-launch, separate stream handling, dataset harvesting and preflight, and evidence. This
-repository's `workflows/k6/*.yaml` and k6 files are bundled fixtures/examples;
-they demonstrate the engine and do not make Punch the owner of a consumer's
-workload definitions.
+reusable `src/punch/` engine. This repository's `workflows/k6/*.yaml` and k6
+files are bundled fixtures that demonstrate the engine; they do not make Punch
+the owner of a consumer's workloads.
 
-## What each layer can do to the layer above and below
+## Allowed calls
 
-| Layer | May call layer below | Must not call layer above |
+| Layer | May call | Must not call |
 |---|---|---|
-| Bash wrapper | Python orchestrator | — |
-| Python orchestrator | one `docker compose ... run --rm` per workflow | host tools (npm, k6); installs no dependencies during `run` |
-| Docker Compose | starts containers | the orchestrator |
-| Docker images | install dependencies inside themselves | other services or the orchestrator |
-| k6 test code | HTTP to compose-network hostnames | the orchestrator, compose, or Docker |
-| Artifacts | written by k6 + orchestrator | nothing reads back into upstream layers |
+| Bash wrapper | Punch engine | — |
+| Punch engine | one `docker compose ... run --rm` per workflow | host `npm` or `k6`; dependency installs during `run` |
+| Docker Compose | containers | the engine |
+| Docker images | their own dependency installs | other services, the engine |
+| k6 test code | HTTP to compose-network hostnames | the engine, Compose, Docker |
+| Artifacts | written by k6 and the engine | nothing reads them back upstream |
 
-## Common anti-patterns
+## Anti-patterns
 
-Review catches these before merge.
-
-1. **k6 owning orchestration.** A test file that starts containers, polls
-   compose state, or writes outside `/reports/`. k6 must remain a pure load
-   generator. Fix: move the logic into `src/punch/__main__.py`.
-2. **Bash owning business logic.** A bin script that parses output, branches
-   on it, or computes pass/fail. Bash is a thin wrapper; logic belongs in
-   Python. Fix: move into `src/punch/`.
-3. **Compose service names changing casually.** Renaming `gateway-api` to
-   `gateway` breaks every test that does `http.get('http://gateway-api:...')`
-   and every healthcheck. Service names are a contract. Fix: treat renames as
-   their own Plan with a dependents grep + update.
-4. **Python bypassing Compose.** A subprocess call that invokes `k6 run ...`
-   directly on the host, or `docker run grafana/k6` outside the compose
-   network. Punch's contract is *Docker First, Compose-mediated*. Fix:
-   `docker compose run --rm k6 ...`.
-5. **Build agents changing multiple layers without a Plan.** A single Build
-   slice that edits Python + compose + a k6 test. Each layer has different
-   reviewers and different rollback paths. Fix: stop, return to Plan, split
-   the work.
-6. **Reporting paths changing without a contract update.** Renaming
-   `reports/state/punch-run.json` or splitting it into multiple files breaks
-   the CI validation job and any downstream consumer. Fix: treat as a
-   contract change — the plan must call out every consumer.
-7. **Treating stderr as dataset data.** Only workflow-declared `[DATA <dataset>]` records on
-   stdout are harvested. Fix: preserve separate streams in
-   `src/punch/execution.py`; require confirmation and publish CSV atomically
-   only after success.
-
-## When to consult this file
-
-- A requested change should name a single owning layer.
-- Every path a change touches should map to a layer here.
-- A diff that touches more than one layer must say why the crossing is
-  needed.
+1. **k6 owning orchestration.** A test that starts containers, polls Compose,
+   or writes outside `/reports/`. Move it to `src/punch/`.
+2. **Bash owning logic.** A bin script that parses output, branches on it, or
+   computes pass/fail. Move it to `src/punch/`.
+3. **Casual Compose service renames.** `gateway-api` is used by tests,
+   healthchecks, CI, and docs. A rename is its own change with a dependents
+   grep.
+4. **Python bypassing Compose.** Host `k6 run` or `docker run grafana/k6`
+   outside the compose network. Use `docker compose run --rm`.
+5. **One change across several layers without a reason.** Engine + Compose +
+   k6 test in one diff has different reviewers and rollbacks. Split it, or
+   state why the crossing is needed.
+6. **Silent artifact contract changes.** Renaming or splitting
+   `reports/state/punch-run.json` breaks CI validation and consumers. Name
+   every consumer in the change.
+7. **Treating stderr as data.** Only `[DATA <dataset>]` lines on stdout are
+   harvested, only for opted-in datasets, published atomically after success
+   (`src/punch/execution.py`).
