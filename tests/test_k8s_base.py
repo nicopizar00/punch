@@ -60,6 +60,9 @@ class PunchK6RunTemplateTests(unittest.TestCase):
     def test_runs_bounded_with_the_executor_account_and_archived_logs(self) -> None:
         # An unpullable image must fail the run instead of hanging a PostSync hook.
         for template in _templates().values():
+            # timeout counts Pending time too (a pod that is never scheduled);
+            # activeDeadlineSeconds only starts once the pod is on a node.
+            self.assertEqual(template["timeout"], "900s")
             self.assertEqual(template["activeDeadlineSeconds"], 900)
             self.assertEqual(template["serviceAccountName"], "punch-executor")
             self.assertTrue(template["archiveLocation"]["archiveLogs"])

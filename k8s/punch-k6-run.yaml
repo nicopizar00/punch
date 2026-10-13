@@ -19,8 +19,11 @@ spec:
         runAsUser: 12345
         runAsGroup: 12345
         runAsNonRoot: true
-      # Bounds a run that never starts (e.g. ImagePullBackOff) so an Argo CD
-      # hook fails instead of hanging.
+      # Bounds every run so an Argo CD hook fails instead of hanging. timeout
+      # counts time spent Pending (a pod never scheduled, e.g. under memory
+      # pressure); activeDeadlineSeconds bounds the pod once it is on a node
+      # (e.g. ImagePullBackOff).
+      timeout: 900s
       activeDeadlineSeconds: 900
       archiveLocation:
         archiveLogs: true
@@ -133,6 +136,7 @@ spec:
         runAsUser: 12345
         runAsGroup: 12345
         runAsNonRoot: true
+      timeout: 900s
       activeDeadlineSeconds: 900
       archiveLocation:
         archiveLogs: true

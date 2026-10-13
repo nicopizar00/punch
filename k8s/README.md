@@ -65,7 +65,8 @@ CSV.
 
 Evidence is the Workflow itself: its phase, node messages and exit codes, the
 `datasets` output parameter (from `rows.txt`), and the archived logs and
-reports. Runs end within `activeDeadlineSeconds: 900`.
+reports. Runs end within 900 s, including time spent Pending (`timeout: 900s`;
+`activeDeadlineSeconds: 900` bounds the pod once it is on a node).
 
 Pods run as uid/gid 12345, the `grafana/k6` image user, so Argo's executor
 writes input artifacts the step can read. A consumer image with a different
