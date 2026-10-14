@@ -160,5 +160,7 @@ evidence rules: [validation.md](docs/workflows/validation.md).
 ## Kubernetes runtime
 
 `k8s/` runs the same workflows natively on Argo Workflows — no Python in the
-cluster, datasets and evidence in S3. Contract and consumer setup:
-[`k8s/README.md`](k8s/README.md).
+cluster, datasets and evidence in S3. The contract, the consumer image and
+cluster prerequisites, the mapping from a workflow YAML to a thin template,
+running and chaining workflows, Argo CD, AWS, the CI design, and
+troubleshooting: [`k8s/README.md`](k8s/README.md).
