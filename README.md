@@ -163,4 +163,7 @@ evidence rules: [validation.md](docs/workflows/validation.md).
 cluster, datasets and evidence in S3. The contract, the consumer image and
 cluster prerequisites, the mapping from a workflow YAML to a thin template,
 running and chaining workflows, Argo CD, AWS, the CI design, and
-troubleshooting: [`k8s/README.md`](k8s/README.md).
+troubleshooting: [`k8s/README.md`](k8s/README.md). Step mapping from the
+local orchestrator, GitHub Actions parity, dataset lifetime, and other
+clouds:
+[`docs/architecture/orchestrator-to-kubernetes.md`](docs/architecture/orchestrator-to-kubernetes.md).

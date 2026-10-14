@@ -4,7 +4,9 @@ A second, Kubernetes-native runtime for Punch workflows
 ([ADR 0006](../docs/decisions/0006-kubernetes-runtime.md)). Argo Workflows
 runs the step and moves artifacts through S3; a POSIX shell step ports
 Punch's core data contract. No Python and no Punch image run in the cluster.
-The compose runtime (`punch run`) is unchanged.
+The compose runtime (`punch run`) is unchanged. How each `punch run` step
+maps here, GitHub Actions parity, dataset lifetime, and other clouds:
+[orchestrator to Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md).
 
 | File | Holds |
 | --- | --- |
