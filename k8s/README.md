@@ -5,7 +5,8 @@ A second, Kubernetes-native runtime for Punch workflows
 runs the step and moves artifacts through S3; a POSIX shell step ports
 Punch's core data contract. No Python and no Punch image run in the cluster.
 The compose runtime (`punch run`) is unchanged. How each `punch run` step
-maps here, GitHub Actions parity, dataset lifetime, and other clouds:
+maps here, the CI design (GitHub workflows, chains), dataset lifetime, design
+gaps, weak points against k6 practice, and other clouds:
 [orchestrator to Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md).
 
 | File | Holds |
@@ -316,7 +317,8 @@ above:
    k6 starts.
 
 Datasets in the bucket and the compose runtime's local data files are
-separate stores.
+separate stores. The CI design chains inside one Workflow instead
+([chain on Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#chain-on-kubernetes)).
 
 ## Sync with Argo CD
 
@@ -376,20 +378,11 @@ piece.
 
 ## Trigger from CI
 
-Punch ships no CI job for this runtime. The design for an on-demand job
-against AWS, which no job implements yet:
-
-1. Take `workflow`, `config`, and `produce` as inputs (`workflow_dispatch` on
-   GitHub Actions).
-2. Assume an AWS role through OIDC, so the repository stores no keys.
-3. Build the k6 images and push them to ECR, tagged with the commit SHA.
-4. Set the images as in [Run on AWS](#run-on-aws) and apply the
-   kustomization server-side.
-5. Fetch the cluster's kubeconfig.
-6. Create the Workflow as in [Run a workflow](#run-a-workflow).
-7. Poll `.status.phase` until the run is over, and fail the job unless the
-   phase is `Succeeded`.
-8. Upload the evidence: the Workflow's YAML and the `runs/<run>/` objects.
+Punch ships no CI job for this runtime. The design, with GitHub workflows
+for one Punch workflow or a chain, OIDC instead of keys, and runs created only
+after Argo CD has synced the commit, is in
+[orchestrator to Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#github-workflows).
+CI never applies the kustomization.
 
 ## Troubleshooting
 
