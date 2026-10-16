@@ -193,6 +193,8 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.datasets[0].path, self.carts_path)
         self.assertEqual(result.datasets[0].record_count, 2)
         self.assertTrue(result.datasets[0].published)
+        # Readable by the k6 container user, not only the host user.
+        self.assertEqual(self.carts_path.stat().st_mode & 0o777, 0o644)
 
     def test_not_opted_in_writes_nothing_and_passes(self) -> None:
         result = self.run_producer(["[DATA carts] c1,p1,s1"], produce=())

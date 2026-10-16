@@ -43,6 +43,9 @@ class ExecutionResult:
 
 # Where the selected k6 options JSON is bind-mounted for `k6 run --config`.
 K6_CONFIG_MOUNT = "/punch/k6-config.json"
+# A published dataset is read by the k6 container's user, which on Linux is
+# not the host user that wrote it; NamedTemporaryFile creates files as 0600.
+DATASET_MODE = 0o644
 
 
 def build_compose_run_command(
@@ -350,6 +353,7 @@ class _DatasetSink:
 
     def publish(self) -> None:
         self.close()
+        os.chmod(self.temp_path, DATASET_MODE)
         os.replace(self.temp_path, self.path)
 
     def discard(self) -> None:
