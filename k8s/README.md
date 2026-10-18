@@ -318,7 +318,7 @@ above:
 
 Datasets in the bucket and the compose runtime's local data files are
 separate stores. The CI design chains inside one Workflow instead
-([chain on Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#chain-on-kubernetes)).
+([chain on Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#punch-workflow-on-kubernetes)).
 
 ## Sync with Argo CD
 
@@ -381,7 +381,7 @@ piece.
 Punch ships no CI job for this runtime. The design, with GitHub workflows
 for one Punch workflow or a chain, OIDC instead of keys, and runs created only
 after Argo CD has synced the commit, is in
-[orchestrator to Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#github-workflows).
+[orchestrator to Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#github-actions).
 CI never applies the kustomization.
 
 ## Troubleshooting

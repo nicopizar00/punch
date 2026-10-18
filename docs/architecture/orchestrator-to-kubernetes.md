@@ -1,11 +1,19 @@
 # Punch: local orchestrator to Kubernetes
 
 This guide maps each `punch run` step to Argo Workflows and sets the target
-CI design. In it, GitHub workflows submit one Punch workflow, or a chain of
-them, to Argo Workflows. Argo CD keeps the templates in step with Git, and a
-bucket keeps each run's artifacts for a fixed time. The step contract,
-parameters, and commands are in [`k8s/README.md`](../../k8s/README.md), and
-the decision is [ADR 0006](../decisions/0006-kubernetes-runtime.md).
+CI design. In it, a GitHub workflow submits one Punch job, or one Punch
+workflow (an ordered sequence of Punch jobs), to Argo Workflows. Argo CD
+keeps the templates in step with Git, and a bucket keeps each run's artifacts
+for a fixed time. The step contract, parameters, and commands are in
+[`k8s/README.md`](../../k8s/README.md), and the decision is
+[ADR 0006](../decisions/0006-kubernetes-runtime.md). The path from a laptop
+to GitHub Actions that comes before this one is in the
+[reference architecture, section 9](reference-architecture-and-implementation-guide.md#9-from-a-laptop-to-github-actions).
+
+The terms follow [ADR 0007](../decisions/0007-job-terminology.md), which is
+accepted and not built: until the rename lands, the YAML kind, the engine,
+and the template parameter still say `workflow` (see
+[Current state](#current-state-against-the-design)).
 
 Status words: **built** (exists and has run), **design** (how it must work,
 not built), **no** (not possible; the reason is given).
@@ -14,29 +22,29 @@ not built), **no** (not possible; the reason is given).
 
 ```mermaid
 flowchart LR
-  Git["Git: Punch workflow YAML,<br/>thin and chain templates"]
+  Git["Git: Punch job YAML,<br/>thin and Punch workflow templates"]
   Git -->|syncs| CD["Argo CD"]
   CD --> Tpl["WorkflowTemplates"]
-  GH["GitHub workflow<br/>perf-run · perf-chain<br/>dispatch · schedule"]
+  GH["GitHub workflow<br/>perf-job · perf-workflow<br/>dispatch · schedule"]
   GH -->|"1 wait until synced"| CD
   GH -->|"2 create Argo Workflow"| Argo["Argo Workflows"]
   Tpl --> Argo
-  Argo --> Pods["one pod per<br/>Punch workflow"]
+  Argo --> Pods["one pod per<br/>Punch job"]
   Pods <-->|"runs/{run}/"| Bucket[("bucket<br/>lifecycle rule")]
   GH -->|"3 poll, read evidence"| Bucket
 ```
 
 Rules every part follows:
 
-1. The Punch workflow YAML is the only definition. Thin templates, chain
+1. The Punch job YAML is the only definition. Thin templates, Punch workflow
    templates, and the GitHub dropdowns derive from the YAML files, and tests
    fail CI when they drift
    ([mapping](../../k8s/README.md#from-a-workflow-yaml-to-a-thin-template)).
 2. Every step keeps one contract: validate, preflight, run, harvest, publish
    atomically.
-3. Datasets pass between Punch workflows only inside one Argo Workflow. A
-   consumer runs only as a later step of a chain; no run reads data that an
-   earlier run left behind.
+3. Datasets pass between Punch jobs only inside one Argo Workflow. A
+   consuming job runs only as a later step of a Punch workflow; no run reads
+   data that an earlier run left behind.
 4. Every artifact lives under `runs/<run>/`, and one bucket lifecycle rule
    gives it a fixed lifetime.
 5. Templates reach the cluster only from Git, through Argo CD. CI creates
@@ -48,20 +56,23 @@ Rules every part follows:
 
 | Term | Is | Named |
 | --- | --- | --- |
-| Punch workflow | One workflow YAML (`kind: K6Workflow`), one k6 run | `metadata.name` |
-| Chain | Punch workflows linked by datasets, run in order in one Argo Workflow | `<first>-to-<last>` |
-| WorkflowTemplate | Argo's stored definition: thin (one Punch workflow) or chain | the Punch workflow or chain name |
+| Punch job | One job YAML (`kind: K6Job`; today `kind: K6Workflow`), one k6 run | `metadata.name` |
+| Punch workflow | Punch jobs linked by datasets, run in order in one Argo Workflow | `<first>-to-<last>` |
+| Step | A Punch job's place in a Punch workflow | the Punch job's name |
+| WorkflowTemplate | Argo's stored definition: thin (one Punch job) or a Punch workflow template | the Punch job or Punch workflow name |
 | Argo Workflow | One run in the cluster | `generateName: <template>-` |
-| GitHub workflow | One file under `.github/workflows/` | `perf-run.yml`, `perf-chain.yml` |
+| GitHub workflow | One file under `.github/workflows/` | the consumer's, such as `perf-job.yml`, `perf-workflow.yml` |
+| GitHub job | One job of a GitHub workflow run; it runs one Punch job or one Punch workflow | its job id |
 
 Rules for names (design):
 
-- Qualify the word "workflow" in parameters and CI inputs: `punch-workflow`,
-  never a bare `workflow` next to Argo's `{{workflow.name}}` or GitHub's
-  `github.workflow`.
+- A Punch job travels as the template parameter `job` (today `workflow`;
+  ADR 0007). A bare "workflow" means Argo's or GitHub's, as in
+  `{{workflow.name}}` or `github.workflow`; a sequence of jobs is always a
+  "Punch workflow".
 - Argo rejects Workflow and WorkflowTemplate names over 63 characters and
   CronWorkflow names over 52 ([validation][argo-names]). `generateName` adds
-  6 characters, so a Punch workflow or chain name stays at 57 or fewer. The
+  6 characters, so a Punch job or Punch workflow name stays at 57 or fewer. The
   Punch loader accepts 64 today.
 - The `punch-` prefix belongs to Punch's own templates (`punch-k6-run`).
 - Runs are selected by a label set at submit time, never by name prefix:
@@ -75,11 +86,11 @@ Rules for names (design):
 
 | # | `punch run` step (module) | Kubernetes equivalent | Status |
 | --- | --- | --- | --- |
-| 1 | Load and validate the YAML (`workflow`) | Thin WorkflowTemplate plus a parity test | built |
-| 2 | Find each dataset's producers (`catalog`) | `requires-hint` parameter; the chain list | built; design (list) |
-| 3 | Pick data sources, switch to a producer, `--data` (`data_plan`) | A chain runs the producer first, in the same Argo Workflow | no (pickers); design (chain) |
+| 1 | Load and validate the YAML (`job`; today `workflow`) | Thin WorkflowTemplate plus a parity test | built |
+| 2 | Find each dataset's producers (`catalog`) | `requires-hint` parameter; the Punch workflow list | built; design (list) |
+| 3 | Pick data sources, switch to a producer, `--data` (`data_plan`) | A Punch workflow runs the producer first, in the same Argo Workflow | no (pickers); design (Punch workflow) |
 | 4 | Size a producer, `--size-for` (`sizing`) | The GitHub workflow sizes each producer for its next step before submit | design |
-| 5 | Validate `--produce` (`execution`) | `k6-run.sh` step 0, exit 2; a chain sets `produce` to the dataset the next step requires | built |
+| 5 | Validate `--produce` (`execution`) | `k6-run.sh` step 0, exit 2; a Punch workflow sets `produce` to the dataset the next step requires | built |
 | 6 | Preflight the required dataset | Input artifact, then `k6-run.sh` step 1, exit 1 | built (key `datasets/<ds>.csv`); design (`from:` the producer task) |
 | 7 | Confirm the Docker run (TTY) | Creating the Argo Workflow is the consent | no TTY |
 | 8 | Check `spec.environment.required` | Not checked | design |
@@ -89,7 +100,13 @@ Rules for names (design):
 | 12 | Evidence `reports/state/punch-run.json` | Argo Workflow status plus `runs/<run>/` | built |
 | 13 | Bounded cancel on SIGINT | `spec.shutdown: Stop`, `timeout: 900s` | built |
 
-## GitHub workflows
+## GitHub Actions
+
+Today a GitHub job can already run Punch with Docker Compose on its own
+runner
+([reference architecture, section 9](reference-architecture-and-implementation-guide.md#9-from-a-laptop-to-github-actions)).
+This section is the design for the next step, where the GitHub job submits to
+Kubernetes instead of running k6 itself.
 
 Two GitHub workflows run on demand (`workflow_dispatch`) and on a schedule.
 Both follow the same steps (design):
@@ -99,19 +116,19 @@ flowchart TB
   T["dispatch: pick an entry<br/>schedule: the cron line names the entry"] --> P["plan: resolve the entry,<br/>size each producer"]
   P --> I["OIDC: cloud role, kubeconfig"]
   I --> W["wait: Argo CD synced this commit, Healthy"]
-  W --> S["create the Argo Workflow<br/>from a thin or chain template"]
+  W --> S["create the Argo Workflow<br/>from a thin or Punch workflow template"]
   S --> Poll["poll the phase until the run ends"]
   Poll --> E["job summary, evidence from runs/{run}/"]
 ```
 
-| | `perf-run.yml` | `perf-chain.yml` |
+| | `perf-job.yml` | `perf-workflow.yml` |
 | --- | --- | --- |
-| Dropdown | Punch workflows without `requires` | Chains: paths along `targets` that start at a Punch workflow without `requires` |
+| Dropdown | Punch jobs without `requires` | Punch workflows: paths along `targets` that start at a Punch job without `requires` |
 | Entries in the catalog below | 6 | 9: six of two steps, three of three |
-| Argo Workflow | From the thin template, no `produce` | From the chain template; every step except the last produces the next step's dataset |
+| Argo Workflow | From the thin template, no `produce` | From the Punch workflow template; every step except the last produces the next step's dataset |
 
-A chain template is an Argo [DAG][argo-dag], so one GitHub workflow covers
-chains of any length.
+A Punch workflow template is an Argo [DAG][argo-dag], so one GitHub workflow
+covers Punch workflows of any length.
 
 The catalog, read from `targets` and `requires` (dashed: an optional
 dataset):
@@ -135,7 +152,7 @@ entry through `github.event.schedule` ([events][gh-events]). An Argo
 to GitHub's schedule. Two runs that load the same system at once skew both
 results, so one `concurrency` group per target environment serializes them.
 
-## Chain on Kubernetes
+## Punch workflow on Kubernetes
 
 ```mermaid
 sequenceDiagram
@@ -144,7 +161,7 @@ sequenceDiagram
   participant P1 as pod http-cart
   participant P2 as pod http-orders
   participant B as Bucket
-  G->>C: create Argo Workflow (chain template, sized config)
+  G->>C: create Argo Workflow (Punch workflow template, sized config)
   C->>P1: task http-cart, produce=carts
   P1->>B: put runs/{run}/ datasets carts.csv
   C->>P2: task http-orders, input from http-cart
@@ -153,17 +170,17 @@ sequenceDiagram
   C-->>G: phase, exit codes, rows per dataset
 ```
 
-A failed producer stops the chain: the consumer task depends on it and
-never starts.
+A failed producer stops the Punch workflow: the consumer task depends on it
+and never starts.
 
-Template changes the chain needs (design):
+Template changes a Punch workflow needs (design):
 
 1. Thin templates read `inputs.parameters` instead of `workflow.parameters`.
    Argo binds an Argo Workflow's arguments to its entrypoint's inputs
-   ([example][argo-args]), so a single run keeps working, and each chain
-   task passes its own `config` and `produce`.
+   ([example][argo-args]), so a single run keeps working, and each task of a
+   Punch workflow passes its own `config` and `produce`.
 2. Thin templates declare the dataset input and expose the step's outputs,
-   so a chain task can take
+   so a later task can take
    `from: "{{tasks.http-cart.outputs.artifacts.datasets}}"`
    ([artifacts][argo-artifacts]).
 3. Outputs use per-run keys under `runs/<run>/` instead of the shared
@@ -193,14 +210,15 @@ long evidence stays, because no run reads data from an earlier run.
 | --- | --- | --- |
 | One step contract | `punch-k6-run` and `k6-run.sh` | built |
 | Templates synced from Git | Argo CD, server-side apply ([sync](../../k8s/README.md#sync-with-argo-cd)) | built |
-| Single run | `kubectl create` or `argo submit` from a thin template ([run](../../k8s/README.md#run-a-workflow)); no GitHub workflow | built (CLI); design (GitHub) |
-| Chain | Two Argo Workflows linked through the shared `datasets/` prefix ([chain](../../k8s/README.md#chain-workflows-through-datasets)) | built, outside the design |
-| Chain in one Argo Workflow | No chain template; thin templates cannot be chain steps | design |
-| Dropdowns from the catalog | The catalog links producers to consumers; nothing lists chains or writes options | design |
+| GitHub Actions, Compose on the runner | Punch's CI runs `./bin/punch run all` in a GitHub job ([section 9](reference-architecture-and-implementation-guide.md#9-from-a-laptop-to-github-actions)) | built |
+| Single Punch job | `kubectl create` or `argo submit` from a thin template ([run](../../k8s/README.md#run-a-workflow)); no GitHub workflow | built (CLI); design (GitHub) |
+| Punch workflow | Two Argo Workflows linked through the shared `datasets/` prefix ([Punch workflow](../../k8s/README.md#chain-workflows-through-datasets)) | built, outside the design |
+| Punch workflow in one Argo Workflow | No Punch workflow template; thin templates cannot be steps | design |
+| Dropdowns from the catalog | The catalog links producers to consumers; Punch lists no Punch workflows and writes no options | design |
 | Per-run keys | Reports under `runs/{{workflow.name}}/`; datasets under the shared `datasets/` | built (reports); design (datasets) |
 | Fixed lifetime | No lifecycle rule, `ttlStrategy`, or `podGC` | design |
 | Commit-tagged images, OIDC | None; the consumer's kustomization maps images | design |
-| Qualified names | Template parameter `workflow`; the loader accepts 64 characters | design |
+| Job terms and qualified names | Kind `K6Workflow`, module `punch.workflow`, template parameter `workflow`; the loader accepts 64 characters | design ([ADR 0007](../decisions/0007-job-terminology.md)) |
 
 ## Not possible as stated, and the redesign
 
@@ -209,15 +227,15 @@ long evidence stays, because no run reads data from an earlier run.
 | Dropdown read from the YAML files at dispatch | Keys under `on:` take no expressions, so `choice` options are literal ([contexts][gh-contexts]) | Generate the options when the catalog changes; a test fails on drift |
 | Inputs on a scheduled run | A `schedule` run carries no inputs | One cron line per entry, read from `github.event.schedule` |
 | Reliable GitHub schedules | Runs can be delayed or dropped under load, run on the default branch only, and stop after 60 days without activity in a public repository ([events][gh-events]) | Accept the limits, or use a CronWorkflow synced by Argo CD; its evidence stays out of the GitHub UI |
-| Thin templates as chain steps | `main` reads `workflow.parameters` and declares no inputs or outputs | Template changes 1 and 2 |
+| Thin templates as Punch workflow steps | `main` reads `workflow.parameters` and declares no inputs or outputs | Template changes 1 and 2 |
 | In-run handoff on today's keys | The input key `datasets/<ds>.csv` and the output key `datasets` are shared by every run | Template change 3 |
 | CI applying the kustomization | Argo CD owns the templates, so a CI apply puts the cluster out of step with Git | CI waits for the sync, then only creates Argo Workflows |
 | Submitting right after a push | Until Argo CD syncs, the run uses the previous commit's templates | Wait until the Application's `status.sync.revision` equals the commit and its health is `Healthy` |
 | A new image per commit without a Git change | Argo CD takes images from the kustomization in Git | Commit the tag and wait for the sync, or pass the image as a parameter, which lets any submitter run any image |
 | GitHub-hosted runners against a local or private cluster | The runner has no route to the cluster API | A cluster API reachable through OIDC (EKS), or a self-hosted runner inside the network |
 | `--size-for` in the cluster | Sizing needs Python and both YAML files at plan time | Size on the runner; template change 5 |
-| Optional dataset in a chain | The template has one input, for `requires` | Template change 4; until then, the 2 chains through `http-purchase-registered` cannot run |
-| Two required datasets | One input slot | A second slot; no chain in the catalog needs one |
+| Optional dataset in a Punch workflow | The template has one input, for `requires` | Template change 4; until then, the 2 Punch workflows through `http-purchase-registered` cannot run |
+| Two required datasets | One input slot | A second slot; no Punch workflow in the catalog needs one |
 | Menus, pickers, prompts | A pod or CI job has no TTY | Dropdown entries |
 | Quoted CSV payloads | The shell harvester splits on commas | Keep payloads plain |
 | OCI pod identity for artifacts | Argo has no OCI driver; the [S3 Compatibility API][oci-s3] signs with Customer Secret Keys | A key Secret scoped to one bucket |
@@ -231,7 +249,7 @@ does not follow yet.
 | --- | --- | --- |
 | The k6 pod can share nodes with the system under test | Keep 20% CPU idle on the load generator; give k6 pods their own nodes (node selector, taint) | [large tests][k6-large] |
 | Step pods set no CPU or memory requests or limits | Set both; browser runs start at desktop size (the example uses 4 CPU, 8 GB) and scale down | [browser tests][k6-browser] |
-| One pod per Punch workflow caps load at one node | k6-operator splits one test across pods (`parallelism`) and nodes (`separate: true`) | [distributed tests][k6-distributed], [TestRun][k6-testrun] |
+| One pod per Punch job caps load at one node | k6-operator splits one test across pods (`parallelism`) and nodes (`separate: true`) | [distributed tests][k6-distributed], [TestRun][k6-testrun] |
 | Results arrive only at the end (summary, HTML report) | Stream metrics during the run (`--out experimental-prometheus-rw`) and read them beside the system's metrics | [remote write][k6-prw] |
 | Every step stops at 900 s | Soak tests hold load for hours to days; bound each run by its k6 config plus a margin | [soak testing][k6-soak] |
 | Pods keep default network limits | Raise `net.ipv4.ip_local_port_range` (a safe sysctl, set per pod); `net.ipv4.tcp_tw_reuse` needs a kubelet allowlist | [fine-tune OS][k6-os], [sysctls][k8s-sysctl] |
@@ -262,6 +280,7 @@ columns follow each provider's documentation.
 
 Punch: [`k8s/README.md`](../../k8s/README.md) ·
 [ADR 0006](../decisions/0006-kubernetes-runtime.md) ·
+[ADR 0007](../decisions/0007-job-terminology.md) ·
 [ADR 0005](../decisions/0005-workflow-yaml-runtime.md) ·
 [Reference architecture](reference-architecture-and-implementation-guide.md) ·
 [Boundaries](punch-boundaries.md) ·
