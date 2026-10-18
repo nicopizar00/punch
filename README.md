@@ -1,7 +1,7 @@
 # k6-ts-docker
 
-Punch (`bin/punch`, `src/punch/`) turns one declarative workflow YAML into one
-Docker Compose run of k6. This repository also carries TypeScript k6 tests and
+Punch (`bin/punch`, `src/punch/`) turns one declarative Punch job (a YAML
+file) into one Docker Compose run of k6. This repository also carries TypeScript k6 tests and
 a small reference app so the whole pipeline runs end to end, locally and in
 GitHub Actions.
 
@@ -25,10 +25,10 @@ docker compose build
 
 | Command | Does |
 |---|---|
-| `punch doctor` | Check Docker, Compose, Python, and the bundled workflows |
-| `punch run <name\|path.yaml>` | Run one bundled workflow or any workflow YAML |
-| `punch run all` | Run every bundled workflow in order; skips one whose required environment is unset |
-| `punch menu [workflows-dir]` | Pick and run a workflow interactively (default: `workflows/k6/`) |
+| `punch doctor` | Check Docker, Compose, Python, and the bundled jobs |
+| `punch run <name\|path.yaml>` | Run one bundled job or any job YAML |
+| `punch run all` | Run every bundled job in order; skips one whose required environment is unset |
+| `punch menu [jobs-dir]` | Pick and run a job interactively (default: `jobs/k6/`) |
 | `punch clean` | `docker compose down --volumes --remove-orphans` |
 
 `punch run` flags:
@@ -43,15 +43,15 @@ docker compose build
 | `--collect-logs` | After the run, write service logs to `reports/logs/` |
 | `--keep-going` | With `all`, continue after a failure |
 
-`--produce`, `--data`, and `--size-for` apply to one workflow, not `all`.
+`--produce`, `--data`, and `--size-for` apply to one job, not `all`.
 `./bin/test-smoke`, `test-gate`, `test-journey`, `test-suite`, `build`, and
 `clean` are thin wrappers over `punch run` and `docker compose`.
 
-## Workflow YAML
+## Job YAML
 
 ```yaml
 apiVersion: punch/v1
-kind: K6Workflow
+kind: K6Job
 metadata:
   name: orders
   description: Create orders.
@@ -79,13 +79,13 @@ Loading is strict: unknown or duplicate keys, bad names, missing files, and
 paths escaping `workingDirectory` fail before any run. Every YAML in one
 directory forms a catalog; Punch checks that targets exist and consume the
 dataset, every required dataset has a producer, and producers of a dataset
-agree on columns. Bundled workflows declare no data.
+agree on columns. Bundled jobs declare no data.
 
 ### Load shape
 
 The load shape is a native k6 options JSON. Punch bind-mounts it read-only at
 `/punch/k6-config.json` and appends `--config /punch/k6-config.json`.
-`--config` (or a menu preset from `options/` beside the workflows directory)
+`--config` (or a menu preset from `options/` beside the jobs directory)
 replaces `spec.k6.config` for one run; with neither, no config is passed. k6
 lets script options override a config file, so a script that takes its shape from the config must not export
 `scenarios`, `vus`, `iterations`, `duration`, or `stages`.
@@ -107,22 +107,22 @@ lets script options override a config file, so a script that takes its shape fro
   run reads has no rows, a list of its producers opens (the `recommended` one
   preselected, ones missing required environment tagged `needs <VAR>`);
   picking one runs that producer instead (`punch run` writes its dataset; the
-  menu asks first), still one Compose run, and Punch names the workflow to run
+  menu asks first), still one Compose run, and Punch names the job to run
   next. Esc cancels; `--no-input` skips pickers.
 - **Sizing for a target.** A producer with `spec.sizing` can be sized for any
-  `targets` workflow that also declares it. Punch reads the target's shape
+  `targets` job that also declares it. Punch reads the target's shape
   from a k6 config (`shared-iterations`, `per-vu-iterations`, `constant-vus`,
   or top-level `vus`/`iterations`/`duration`), adds its `margin`, and runs the
   producer with a generated `shared-iterations` config
   (`reports/state/k6-config-<producer>.json`) with enough VUs to finish inside
-  `maxSeconds`. Menu: `Size for a target workflow`; CLI: `--size-for <target>`
+  `maxSeconds`. Menu: `Size for a target job`; CLI: `--size-for <target>`
   (shape from `--config`, else the target's `spec.k6.config`). Fewer rows than
   needed prints a warning; the exit code is unchanged.
 
 A data file left from an earlier run is not evidence; read
 `reports/state/punch-run.json`.
 
-## Reference app and bundled workflows
+## Reference app and bundled jobs
 
 | Service | Port | Role |
 |---|---|---|
@@ -131,7 +131,7 @@ A data file left from an earlier run is not evidence; read
 | `orders-api` | 3002 | Create/read orders in Postgres |
 | `postgres` | 5432 | Persistence, seeded by `docker/postgres/init.sql` |
 
-| Workflow | Script | Demonstrates |
+| Job | Script | Demonstrates |
 |---|---|---|
 | `smoke` | `smoke.ts` | Every service is reachable and healthy |
 | `gate` | `catalog-gate.ts` | Latency, error-rate, and check thresholds on catalog reads |
@@ -141,9 +141,9 @@ A data file left from an earlier run is not evidence; read
 ## Artifacts
 
 Each run writes `reports/state/punch-run.json` (the run evidence),
-`reports/logs/k6-<workflow>.log`, and each script's `<script>-report.html`
+`reports/logs/k6-<job>.log`, and each script's `<script>-report.html`
 and `<script>.json`. CI uploads `reports/` as `performance-suite-reports`. Schema and
-evidence rules: [validation.md](docs/workflows/validation.md).
+evidence rules: [validation.md](docs/jobs/validation.md).
 
 ## Docs
 
@@ -151,7 +151,7 @@ evidence rules: [validation.md](docs/workflows/validation.md).
 |---|---|
 | [Reference architecture](docs/architecture/reference-architecture-and-implementation-guide.md) | Components, contracts, design decisions, reproducing the core |
 | [Boundaries](docs/architecture/punch-boundaries.md) | Layer ownership and anti-patterns |
-| [Validation](docs/workflows/validation.md) | Evidence contract |
+| [Validation](docs/jobs/validation.md) | Evidence contract |
 | [Decisions](docs/decisions/) | ADRs |
 | [Specs](docs/specs/) | Feature specs: data pickers, target sizing, native k6 config |
 | [CLAUDE.md](CLAUDE.md) | Project rules |
@@ -159,11 +159,11 @@ evidence rules: [validation.md](docs/workflows/validation.md).
 
 ## Kubernetes runtime
 
-`k8s/` runs the same workflows natively on Argo Workflows — no Python in the
+`k8s/` runs the same jobs natively on Argo Workflows — no Python in the
 cluster, datasets and evidence in S3. The contract, the consumer image and
-cluster prerequisites, the mapping from a workflow YAML to a thin template,
-running and chaining workflows, Argo CD, AWS, the CI design, and
+cluster prerequisites, the mapping from a job YAML to a thin template,
+running a job or a Punch workflow, Argo CD, AWS, the CI design, and
 troubleshooting: [`k8s/README.md`](k8s/README.md). Step mapping from the
-local orchestrator, the CI design (GitHub workflows, chains), dataset
-lifetime, design gaps, weak points against k6 practice, and other clouds:
+local orchestrator, the CI design (GitHub workflows for jobs and Punch
+workflows), dataset lifetime, design gaps, weak points against k6 practice, and other clouds:
 [`docs/architecture/orchestrator-to-kubernetes.md`](docs/architecture/orchestrator-to-kubernetes.md).

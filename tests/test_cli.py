@@ -14,7 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.__main__ import main
-from punch.workflow import load_workflow
+from punch.job import load_job
 
 
 FAKE_DOCKER = """#!/usr/bin/env python3
@@ -38,9 +38,9 @@ raise SystemExit(exit_code)
 """
 
 
-PLAIN_WORKFLOW = """\
+PLAIN_JOB = """\
 apiVersion: punch/v1
-kind: K6Workflow
+kind: K6Job
 metadata:
   name: plain-fixture
 spec:
@@ -84,8 +84,8 @@ class CliTests(unittest.TestCase):
 
         fixtures = Path(__file__).resolve().parent / "fixtures"
         shutil.copy(fixtures / "docker-compose.yml", self.root / "docker-compose.yml")
-        self.workflow_path = self.root / "workflow.yaml"
-        self.workflow_path.write_text(PLAIN_WORKFLOW, encoding="utf-8")
+        self.job_path = self.root / "job.yaml"
+        self.job_path.write_text(PLAIN_JOB, encoding="utf-8")
 
         # A separate directory is one catalog: producer + consumer of "carts".
         self.flows = self.root / "flows"
@@ -144,7 +144,7 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("build", self.fake_docker_arguments())
 
     def test_direct_yaml_path_is_accepted(self) -> None:
-        rc = main(["run", str(self.workflow_path)])
+        rc = main(["run", str(self.job_path)])
         self.assertEqual(rc, 0)
 
     def test_produce_flag_publishes_dataset_noninteractively(self) -> None:
@@ -230,7 +230,7 @@ class CliTests(unittest.TestCase):
         rc = main(["run", str(self.consumer_path)])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
-        self.assertIn('targets unknown workflow "ghost"', self.evidence()["results"][0]["failure"])
+        self.assertIn('targets unknown job "ghost"', self.evidence()["results"][0]["failure"])
 
     def test_dataset_aliasing_the_state_artifact_is_rejected_before_writing(self) -> None:
         os.environ["RUN_ID"] = "run-1"
@@ -253,18 +253,18 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit), patch("sys.stderr"):
             main(["run", "smoke", "--confirm-output-data"])
 
-    def test_direct_external_workflow_requires_target_before_run(self) -> None:
+    def test_direct_external_job_requires_target_before_run(self) -> None:
         rc = main(["run", "bff-checkout-journey"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
 
-    def test_direct_external_workflow_rejects_an_empty_target_before_run(self) -> None:
+    def test_direct_external_job_rejects_an_empty_target_before_run(self) -> None:
         os.environ["TARGET_BASE_URL"] = ""
         rc = main(["run", "bff-checkout-journey"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.compose_run_count(), 0)
 
-    def test_all_skips_external_workflow_without_target(self) -> None:
+    def test_all_skips_external_job_without_target(self) -> None:
         rc = main(["run", "all"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.compose_run_count(), 3)
@@ -275,10 +275,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 9)
         self.assertEqual(self.compose_run_count(), 3)
 
-    def test_evidence_records_workflow_and_dataset_fields(self) -> None:
+    def test_evidence_records_job_and_dataset_fields(self) -> None:
         self.assertEqual(main(["run", "smoke"]), 0)
         result = self.evidence()["results"][0]
-        self.assertIn("workflow", result)
+        self.assertIn("job", result)
+        self.assertNotIn("workflow", result)
         self.assertEqual(result["datasets"], [])
         self.assertNotIn("csvRecordCount", result)
 
@@ -523,8 +524,8 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("switchedFrom", result)
         self.assertEqual(result["dataSources"], {"carts": "data/carts.csv"})
 
-    def test_workflow_without_data_records_no_data_sources(self) -> None:
-        self.assertEqual(main(["run", str(self.workflow_path)]), 0)
+    def test_job_without_data_records_no_data_sources(self) -> None:
+        self.assertEqual(main(["run", str(self.job_path)]), 0)
         self.assertNotIn("dataSources", self.evidence()["results"][0])
 
     def test_non_tty_never_plans(self) -> None:
@@ -594,25 +595,25 @@ class CliTests(unittest.TestCase):
 
     def test_config_flag_mounts_the_file_and_passes_it_to_k6(self) -> None:
         config = self.write_config("five", self.iterations(5))
-        rc = main(["run", str(self.workflow_path), "--config", str(config)])
+        rc = main(["run", str(self.job_path), "--config", str(config)])
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn(f"{config.resolve()}:/punch/k6-config.json:ro", call)
         self.assertEqual(call[-4:], ["run", "/scripts/plain-fixture.js", "--config", "/punch/k6-config.json"])
         self.assertEqual(self.evidence()["results"][0]["config"], "flows/five.json")
 
-    def test_workflow_config_is_the_default(self) -> None:
+    def test_job_config_is_the_default(self) -> None:
         config = self.write_config("default", self.iterations(5))
-        self.workflow_path.write_text(
-            PLAIN_WORKFLOW + "    config: flows/default.json\n", encoding="utf-8"
+        self.job_path.write_text(
+            PLAIN_JOB + "    config: flows/default.json\n", encoding="utf-8"
         )
-        self.assertEqual(main(["run", str(self.workflow_path)]), 0)
+        self.assertEqual(main(["run", str(self.job_path)]), 0)
         [call] = self.fake_docker_calls()
         self.assertIn(f"{config.resolve()}:/punch/k6-config.json:ro", call)
         self.assertEqual(call[-2:], ["--config", "/punch/k6-config.json"])
 
     def test_without_config_k6_gets_no_config_flag(self) -> None:
-        self.assertEqual(main(["run", str(self.workflow_path)]), 0)
+        self.assertEqual(main(["run", str(self.job_path)]), 0)
         [call] = self.fake_docker_calls()
         self.assertNotIn("--config", call)
         self.assertNotIn("config", self.evidence()["results"][0])
@@ -622,7 +623,7 @@ class CliTests(unittest.TestCase):
         broken.write_text("[1, 2]", encoding="utf-8")
         for path in (broken, self.flows / "missing.json"):
             with self.subTest(path=path.name), patch("sys.stderr", io.StringIO()):
-                self.assertEqual(main(["run", str(self.workflow_path), "--config", str(path)]), 1)
+                self.assertEqual(main(["run", str(self.job_path), "--config", str(path)]), 1)
         self.assertEqual(self.compose_run_count(), 0)
 
     def test_size_for_writes_a_sized_producer_config(self) -> None:
@@ -733,7 +734,7 @@ class CliTests(unittest.TestCase):
     def test_size_for_producer_without_data_fails_before_docker(self) -> None:
         path = self.flows / "no-data.yaml"
         path.write_text(
-            PLAIN_WORKFLOW.replace("name: plain-fixture", "name: no-data")
+            PLAIN_JOB.replace("name: plain-fixture", "name: no-data")
             + "  sizing:\n    iterationSeconds: 1\n    maxSeconds: 270\n",
             encoding="utf-8",
         )

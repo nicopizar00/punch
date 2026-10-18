@@ -10,10 +10,10 @@ Scope: `README.md` and `docs/`.
 
 | Content | Home |
 |---|---|
-| What Punch is, commands, flags, workflow YAML | `README.md` |
+| What Punch is, commands, flags, job YAML | `README.md` |
 | Components, contracts, decisions, reproduction | `docs/architecture/reference-architecture-and-implementation-guide.md` |
 | Layer ownership | `docs/architecture/punch-boundaries.md` |
-| Evidence and artifact schema | `docs/workflows/validation.md` |
+| Evidence and artifact schema | `docs/jobs/validation.md` |
 | Decisions | `docs/decisions/NNNN-<topic>.md` |
 | Feature specs | `docs/specs/spec-<topic>.md` |
 | Always-on AI rules | `.github/copilot-instructions.md` |

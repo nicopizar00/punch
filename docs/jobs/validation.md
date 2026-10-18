@@ -6,7 +6,7 @@ A change is done when it has produced the evidence its class requires.
 
 | Change class | Touches | Required evidence |
 |---|---|---|
-| **Runtime-affecting** | `src/**`, `docker/**`, `docker-compose.yml`, `bin/**`, `workflows/**`, `.github/workflows/**`, or any runtime/artifact contract | `./bin/punch run <workflow>` → `reports/state/punch-run.json` with `"passed": true` |
+| **Runtime-affecting** | `src/**`, `docker/**`, `docker-compose.yml`, `bin/**`, `jobs/**`, `.github/workflows/**`, or any runtime/artifact contract | `./bin/punch run <job>` → `reports/state/punch-run.json` with `"passed": true` |
 | **Documentation-only** | `*.md`, `docs/**`, `.github/instructions/**` with no contract impact | Diff review and a link check; no run expected |
 
 A change that mixes both is runtime-affecting.
@@ -21,7 +21,7 @@ menu prints results to the terminal and writes no evidence.
   "command": "run",
   "tests": ["smoke", "gate", "journey", "bff-checkout-journey"],
   "results": [
-    {"test": "smoke", "workflow": "workflows/k6/smoke.yaml", "exitCode": 0,
+    {"test": "smoke", "job": "jobs/k6/smoke.yaml", "exitCode": 0,
      "childExitCode": 0, "passed": true, "failure": null, "datasets": []}
   ],
   "exitCode": 0,
@@ -39,8 +39,8 @@ Per result:
 | `childExitCode` | The k6 container's code; `null` when no container started |
 | `failure` | Why it failed (`null` on success) |
 | `datasets` | `dataset`, `path`, `recordCount`, `published` per produced dataset |
-| `skipped` | `true` when `all` skipped the workflow for missing required environment |
-| `switchedFrom` | Workflows a producer pick replaced, in order |
+| `skipped` | `true` when `all` skipped the job for missing required environment |
+| `switchedFrom` | Jobs a producer pick replaced, in order |
 | `dataSources` | `{"<dataset>": "default" \| "<path>"}` for each dataset read |
 | `config` | k6 options JSON passed as `--config`; absent when none |
 | `sizing` | With `--size-for`: `target`, `datasets`, `shape`, `preset`, `rowsNeeded`, `margin`, `producerIterations`, `producerVus`, `producedRows`, `short` |
@@ -52,7 +52,7 @@ is not evidence for this one.
 
 | Path | Written by |
 |---|---|
-| `reports/logs/k6-<workflow>.log` | Punch: the k6 container's stdout and stderr |
+| `reports/logs/k6-<job>.log` | Punch: the k6 container's stdout and stderr |
 | `reports/<script>-report.html`, `reports/<script>.json` | Each k6 script's `handleSummary` (`smoke`, `catalog-gate`, `order-journey`, `bff-checkout-journey`) |
 | `reports/state/test-context.json` | `order-journey`, `bff-checkout-journey` |
 | `reports/state/k6-config-<producer>.json` | Punch, for a sized producer run |

@@ -7,7 +7,7 @@
 # 2 for invalid inputs, 1 for a failed preflight or harvest.
 set -eu
 
-workflow=${PUNCH_WORKFLOW:?PUNCH_WORKFLOW is required}
+job=${PUNCH_JOB:?PUNCH_JOB is required}
 script=${PUNCH_SCRIPT:?PUNCH_SCRIPT is required}
 config=${PUNCH_CONFIG:-}
 forward=${PUNCH_FORWARD:-}
@@ -50,7 +50,7 @@ if [ "$produce" = "all" ]; then
 else
   for dataset in $(echo "$produce" | tr ',' ' '); do
     lookup "$dataset" "$produces" >/dev/null ||
-      die 2 "$workflow does not produce \"$dataset\" (declared:${declared:- none})"
+      die 2 "$job does not produce \"$dataset\" (declared:${declared:- none})"
     opted="$opted $dataset"
   done
 fi
@@ -58,7 +58,7 @@ fi
 # The template downloads exactly one dataset file (datasets/<requires>.csv).
 set -- $requires
 if [ "$#" -gt 1 ]; then
-  die 2 "$workflow requires $*; the Kubernetes runtime supports one required dataset per workflow"
+  die 2 "$job requires $*; the Kubernetes runtime supports one required dataset per job"
 fi
 
 set -- run "$script"
@@ -72,7 +72,7 @@ for pair in $extra_env; do
   esac
   case " $forward " in
     *" ${pair%%=*} "*) set -- "$@" -e "$pair" ;;
-    *) die 2 "$workflow does not forward \"${pair%%=*}\" (forwarded: ${forward:-none})" ;;
+    *) die 2 "$job does not forward \"${pair%%=*}\" (forwarded: ${forward:-none})" ;;
   esac
 done
 
@@ -85,8 +85,8 @@ for dataset in $requires; do
   fi
   if [ "$rows" -lt 1 ]; then
     producers=$(lookup "$dataset" "$requires_hint" | sed 's/,/, /g')
-    die 1 "$workflow requires \"$dataset\"; produce it with:" \
-      "${producers:-no known workflow} (--produce $dataset)"
+    die 1 "$job requires \"$dataset\"; produce it with:" \
+      "${producers:-no known job} (--produce $dataset)"
   fi
   export "DATA_$(echo "$dataset" | tr 'a-z-' 'A-Z_')_CSV=$file"
 done

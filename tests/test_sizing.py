@@ -40,7 +40,7 @@ def constant(vus: int, duration: str) -> dict:
     return {"scenarios": {"default": {"executor": "constant-vus", "vus": vus, "duration": duration}}}
 
 
-def workflow_yaml(
+def job_yaml(
     name: str,
     *,
     produces: dict[str, list[str]] | None = None,
@@ -49,7 +49,7 @@ def workflow_yaml(
     config: str | None = None,
 ) -> str:
     lines = [
-        "apiVersion: punch/v1", "kind: K6Workflow", "metadata:", f"  name: {name}",
+        "apiVersion: punch/v1", "kind: K6Job", "metadata:", f"  name: {name}",
         "spec:", "  workingDirectory: .", "  compose:", "    file: docker-compose.yml",
         "    service: k6", "  k6:", f"    script: /scripts/{name}.js",
     ]
@@ -86,7 +86,7 @@ class SizingCase(unittest.TestCase):
         self.tmp.cleanup()
 
     def write(self, name: str, **kwargs) -> None:
-        (self.root / f"{name}.yaml").write_text(workflow_yaml(name, **kwargs), encoding="utf-8")
+        (self.root / f"{name}.yaml").write_text(job_yaml(name, **kwargs), encoding="utf-8")
 
     def write_config(self, name: str, config: dict) -> str:
         (self.root / f"{name}.json").write_text(json.dumps(config), encoding="utf-8")
@@ -102,7 +102,7 @@ class SizingCase(unittest.TestCase):
 
     def size(self, config, target="consumer", **kwargs):
         catalog = load_catalog(self.root)
-        return size_producer(catalog.workflows["producer"], target, catalog, config, **kwargs)
+        return size_producer(catalog.jobs["producer"], target, catalog, config, **kwargs)
 
     def assertNotEstimable(self, message: str, config, target="consumer") -> None:
         with self.assertRaisesRegex(SizingError, message):
@@ -226,7 +226,7 @@ class SizingMathTests(SizingCase):
         self.assertNotEstimable('invalid duration "5"', constant(5, "5"))
 
     def test_rows_needed_ignores_unrelated_options(self) -> None:
-        target = load_catalog(self.root).workflows["consumer"]
+        target = load_catalog(self.root).jobs["consumer"]
         config = {**iterations(7), "thresholds": {"checks": ["rate>0.9"]}, "tags": {"x": "y"}}
         self.assertEqual(rows_needed(target, config), 7)
 
@@ -237,7 +237,7 @@ class SizingMathTests(SizingCase):
 class SizingEligibilityTests(SizingCase):
     def test_producer_needs_pace_and_budget(self) -> None:
         catalog = load_catalog(self.root)
-        self.assertTrue(is_sizable_producer(catalog.workflows["producer"]))
+        self.assertTrue(is_sizable_producer(catalog.jobs["producer"]))
         for sizing in ({"iterationSeconds": 1}, {"maxSeconds": 270}, None):
             with self.subTest(sizing=str(sizing)):
                 self.write_producer(sizing=sizing)
@@ -256,13 +256,13 @@ class SizingEligibilityTests(SizingCase):
         self.write_producer(targets=("consumer", "other"))
         self.write_consumer(name="other", sizing=None)
         catalog = load_catalog(self.root)
-        self.assertEqual(sizing_pairs(catalog.workflows["producer"], catalog), (("carts", "consumer"),))
-        self.assertEqual(sizing_pairs(catalog.workflows["consumer"], catalog), ())
+        self.assertEqual(sizing_pairs(catalog.jobs["producer"], catalog), (("carts", "consumer"),))
+        self.assertEqual(sizing_pairs(catalog.jobs["consumer"], catalog), ())
 
     def test_non_sizable_producer_has_no_pairs(self) -> None:
         self.write_producer(sizing=None)
         catalog = load_catalog(self.root)
-        self.assertEqual(sizing_pairs(catalog.workflows["producer"], catalog), ())
+        self.assertEqual(sizing_pairs(catalog.jobs["producer"], catalog), ())
 
 
 class ProducerConfigTests(SizingCase):

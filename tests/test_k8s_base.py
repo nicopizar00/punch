@@ -9,7 +9,7 @@ import yaml
 
 K8S = Path(__file__).resolve().parents[1] / "k8s"
 PARAMETERS = (
-    "workflow",
+    "job",
     "script",
     "config",
     "base-url",
@@ -52,10 +52,16 @@ class PunchK6RunTemplateTests(unittest.TestCase):
                 self.assertEqual(env["K6_LOG_OUTPUT"], "stdout")
                 self.assertEqual(env["K6_LOG_FORMAT"], "raw")
 
-    def test_only_workflow_script_and_base_url_are_required(self) -> None:
+    def test_argo_expressions_keep_argos_workflow_variable(self) -> None:
+        text = (K8S / "punch-k6-run.yaml").read_text(encoding="utf-8")
+        self.assertEqual(text.count("{{workflow."), 2)
+        self.assertIn("{{inputs.parameters.job}}", text)
+        self.assertNotIn("{{inputs.parameters.workflow}}", text)
+
+    def test_only_job_script_and_base_url_are_required(self) -> None:
         for template in _templates().values():
             required = {p["name"] for p in template["inputs"]["parameters"] if "default" not in p}
-            self.assertEqual(required, {"workflow", "script", "base-url"})
+            self.assertEqual(required, {"job", "script", "base-url"})
 
     def test_runs_bounded_with_the_executor_account_and_archived_logs(self) -> None:
         # An unpullable image must fail the run instead of hanging a PostSync hook.

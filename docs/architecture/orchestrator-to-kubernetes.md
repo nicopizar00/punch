@@ -10,10 +10,7 @@ for a fixed time. The step contract, parameters, and commands are in
 to GitHub Actions that comes before this one is in the
 [reference architecture, section 9](reference-architecture-and-implementation-guide.md#9-from-a-laptop-to-github-actions).
 
-The terms follow [ADR 0007](../decisions/0007-job-terminology.md), which is
-accepted and not built: until the rename lands, the YAML kind, the engine,
-and the template parameter still say `workflow` (see
-[Current state](#current-state-against-the-design)).
+The terms follow [ADR 0007](../decisions/0007-job-terminology.md).
 
 Status words: **built** (exists and has run), **design** (how it must work,
 not built), **no** (not possible; the reason is given).
@@ -39,7 +36,7 @@ Rules every part follows:
 1. The Punch job YAML is the only definition. Thin templates, Punch workflow
    templates, and the GitHub dropdowns derive from the YAML files, and tests
    fail CI when they drift
-   ([mapping](../../k8s/README.md#from-a-workflow-yaml-to-a-thin-template)).
+   ([mapping](../../k8s/README.md#from-a-job-yaml-to-a-thin-template)).
 2. Every step keeps one contract: validate, preflight, run, harvest, publish
    atomically.
 3. Datasets pass between Punch jobs only inside one Argo Workflow. A
@@ -56,7 +53,7 @@ Rules every part follows:
 
 | Term | Is | Named |
 | --- | --- | --- |
-| Punch job | One job YAML (`kind: K6Job`; today `kind: K6Workflow`), one k6 run | `metadata.name` |
+| Punch job | One job YAML (`kind: K6Job`), one k6 run | `metadata.name` |
 | Punch workflow | Punch jobs linked by datasets, run in order in one Argo Workflow | `<first>-to-<last>` |
 | Step | A Punch job's place in a Punch workflow | the Punch job's name |
 | WorkflowTemplate | Argo's stored definition: thin (one Punch job) or a Punch workflow template | the Punch job or Punch workflow name |
@@ -66,8 +63,7 @@ Rules every part follows:
 
 Rules for names (design):
 
-- A Punch job travels as the template parameter `job` (today `workflow`;
-  ADR 0007). A bare "workflow" means Argo's or GitHub's, as in
+- A Punch job travels as the template parameter `job`. A bare "workflow" means Argo's or GitHub's, as in
   `{{workflow.name}}` or `github.workflow`; a sequence of jobs is always a
   "Punch workflow".
 - Argo rejects Workflow and WorkflowTemplate names over 63 characters and
@@ -86,7 +82,7 @@ Rules for names (design):
 
 | # | `punch run` step (module) | Kubernetes equivalent | Status |
 | --- | --- | --- | --- |
-| 1 | Load and validate the YAML (`job`; today `workflow`) | Thin WorkflowTemplate plus a parity test | built |
+| 1 | Load and validate the YAML (`job`) | Thin WorkflowTemplate plus a parity test | built |
 | 2 | Find each dataset's producers (`catalog`) | `requires-hint` parameter; the Punch workflow list | built; design (list) |
 | 3 | Pick data sources, switch to a producer, `--data` (`data_plan`) | A Punch workflow runs the producer first, in the same Argo Workflow | no (pickers); design (Punch workflow) |
 | 4 | Size a producer, `--size-for` (`sizing`) | The GitHub workflow sizes each producer for its next step before submit | design |
@@ -211,14 +207,14 @@ long evidence stays, because no run reads data from an earlier run.
 | One step contract | `punch-k6-run` and `k6-run.sh` | built |
 | Templates synced from Git | Argo CD, server-side apply ([sync](../../k8s/README.md#sync-with-argo-cd)) | built |
 | GitHub Actions, Compose on the runner | Punch's CI runs `./bin/punch run all` in a GitHub job ([section 9](reference-architecture-and-implementation-guide.md#9-from-a-laptop-to-github-actions)) | built |
-| Single Punch job | `kubectl create` or `argo submit` from a thin template ([run](../../k8s/README.md#run-a-workflow)); no GitHub workflow | built (CLI); design (GitHub) |
-| Punch workflow | Two Argo Workflows linked through the shared `datasets/` prefix ([Punch workflow](../../k8s/README.md#chain-workflows-through-datasets)) | built, outside the design |
+| Single Punch job | `kubectl create` or `argo submit` from a thin template ([run](../../k8s/README.md#run-a-job)); no GitHub workflow | built (CLI); design (GitHub) |
+| Punch workflow | Two Argo Workflows linked through the shared `datasets/` prefix ([Punch workflow](../../k8s/README.md#run-a-punch-workflow-through-datasets)) | built, outside the design |
 | Punch workflow in one Argo Workflow | No Punch workflow template; thin templates cannot be steps | design |
 | Dropdowns from the catalog | The catalog links producers to consumers; Punch lists no Punch workflows and writes no options | design |
 | Per-run keys | Reports under `runs/{{workflow.name}}/`; datasets under the shared `datasets/` | built (reports); design (datasets) |
 | Fixed lifetime | No lifecycle rule, `ttlStrategy`, or `podGC` | design |
 | Commit-tagged images, OIDC | None; the consumer's kustomization maps images | design |
-| Job terms and qualified names | Kind `K6Workflow`, module `punch.workflow`, template parameter `workflow`; the loader accepts 64 characters | design ([ADR 0007](../decisions/0007-job-terminology.md)) |
+| Job terms and qualified names | Kind `K6Job`, module `punch.job`, template parameter `job`; the loader still accepts 64 characters | built (terms); design (name length) |
 
 ## Not possible as stated, and the redesign
 
@@ -284,7 +280,7 @@ Punch: [`k8s/README.md`](../../k8s/README.md) ·
 [ADR 0005](../decisions/0005-workflow-yaml-runtime.md) ·
 [Reference architecture](reference-architecture-and-implementation-guide.md) ·
 [Boundaries](punch-boundaries.md) ·
-[Validation](../workflows/validation.md)
+[Validation](../jobs/validation.md)
 
 Stack: [k6][k6] · [Argo Workflows][argo] · [Argo CD][argocd] ·
 [Argo CD hooks][argocd-hooks] · [Kustomize][kustomize] ·

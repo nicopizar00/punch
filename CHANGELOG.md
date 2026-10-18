@@ -22,6 +22,12 @@ Semantic Versioning.
 
 ### Changed
 
+- **Breaking:** the YAML unit is a Punch job: `kind: K6Job` (`apiVersion`
+  stays `punch/v1`), `punch.job` (`K6Job`, `JobError`, `load_job`),
+  `punch.catalog.JobCatalog`, `punch.execution.execute_job`, bundled jobs in
+  `jobs/k6/`, the run record key `"job"`, and the `punch-k6-run` parameter
+  `job`. A `kind: K6Workflow` file fails with `kind K6Workflow was renamed to
+  K6Job; change the kind line`. See ADR 0007.
 - After a producer switch the menu asks before writing the switched dataset.
 
 ### Removed

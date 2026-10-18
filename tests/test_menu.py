@@ -14,7 +14,7 @@ from rich.cells import cell_len
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from punch.menu import discover_workflows, run_menu
+from punch.menu import discover_jobs, run_menu
 
 DEFAULT_BASE_URL = "http://host.docker.internal:3001"
 ITERATIONS_5 = {"scenarios": {"default": {
@@ -42,9 +42,9 @@ for line in os.environ.get("FAKE_DOCKER_STDOUT", "").split("|"):
 raise SystemExit(int(os.environ.get("FAKE_DOCKER_EXIT_CODE", "0")))
 """
 
-WORKFLOW_TEMPLATE = """\
+JOB_TEMPLATE = """\
 apiVersion: punch/v1
-kind: K6Workflow
+kind: K6Job
 metadata:
   name: {name}{description}
 spec:
@@ -90,7 +90,7 @@ class MenuTests(unittest.TestCase):
         self.environment_patch.stop()
         self.temporary_directory.cleanup()
 
-    def write_workflow(
+    def write_job(
         self,
         name: str,
         *,
@@ -131,7 +131,7 @@ class MenuTests(unittest.TestCase):
             )
         path = self.root / f"{name}.yaml"
         path.write_text(
-            WORKFLOW_TEMPLATE.format(
+            JOB_TEMPLATE.format(
                 name=name,
                 description=f"\n  description: {description}" if description else "",
                 service=service,
@@ -175,7 +175,7 @@ class MenuTests(unittest.TestCase):
 
     @contextmanager
     def select_menu(self, *indices: int | None):
-        """Supply terminal selections while retaining the real workflow/execution path."""
+        """Supply terminal selections while retaining the real job/execution path."""
         with patch("sys.stdin", _ConfirmedTerminal()):
             with patch(
                 "punch.menu.TerminalMenu",
@@ -183,14 +183,14 @@ class MenuTests(unittest.TestCase):
             ):
                 yield
 
-    def test_discover_workflows_lists_yaml_files_sorted(self) -> None:
-        self.write_workflow("beta")
-        self.write_workflow("alpha")
+    def test_discover_jobs_lists_yaml_files_sorted(self) -> None:
+        self.write_job("beta")
+        self.write_job("alpha")
         self.assertEqual(
-            [path.stem for path in discover_workflows(self.root)], ["alpha", "beta"]
+            [path.stem for path in discover_jobs(self.root)], ["alpha", "beta"]
         )
 
-    def test_no_workflows_reports_and_returns_1(self) -> None:
+    def test_no_jobs_reports_and_returns_1(self) -> None:
         empty_dir = self.root / "empty"
         empty_dir.mkdir()
         with self.select_menu(0):
@@ -198,27 +198,27 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(self.fake_docker_calls(), [])
 
-    def test_run_menu_executes_selected_workflow_once(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+    def test_run_menu_executes_selected_job_once(self) -> None:
+        self.write_job("fixture", forward=["BASE_URL"])
         with self.select_menu(0, 0, 0):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.fake_docker_calls()), 1)
 
-    def test_interrupt_during_workflow_reports_clean_exit(self) -> None:
-        self.write_workflow("fixture")
+    def test_interrupt_during_job_reports_clean_exit(self) -> None:
+        self.write_job("fixture")
         stderr = io.StringIO()
         with self.select_menu(0, 0):
-            with patch("punch.menu.execute_workflow", side_effect=KeyboardInterrupt):
+            with patch("punch.menu.execute_job", side_effect=KeyboardInterrupt):
                 with patch("sys.stderr", stderr):
                     rc = run_menu(self.root)
 
         self.assertEqual(rc, 130)
-        self.assertEqual(stderr.getvalue(), "[punch] workflow interrupted.\n")
+        self.assertEqual(stderr.getvalue(), "[punch] job interrupted.\n")
         self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_custom_base_url_is_forwarded_to_compose_run(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_job("fixture", forward=["BASE_URL"])
         with self.select_menu(0, 0, 1):
             with patch("builtins.input", return_value="http://example.invalid"):
                 rc = run_menu(self.root)
@@ -227,8 +227,8 @@ class MenuTests(unittest.TestCase):
         self.assertIn("BASE_URL=http://example.invalid", call)
 
     def write_pair(self) -> None:
-        self.write_workflow("producer", produces={"orders": ["consumer"]})
-        self.write_workflow("consumer", requires=["orders"])
+        self.write_job("producer", produces={"orders": ["consumer"]})
+        self.write_job("consumer", requires=["orders"])
 
     def test_declining_produce_prompt_runs_without_writing_data(self) -> None:
         self.write_pair()
@@ -258,19 +258,19 @@ class MenuTests(unittest.TestCase):
         with self.record_menus(0, 0, None) as calls, patch("sys.stdout", output):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
-        # top-level, workflow, producer picker — no target/options menus after Esc
+        # top-level, job, producer picker — no target/options menus after Esc
         self.assertEqual(len(calls), 3)
         self.assertEqual(self.fake_docker_calls(), [])
         self.assertIn("[punch] menu canceled.", output.getvalue())
 
     def test_switch_asks_to_write_like_a_direct_pick(self) -> None:
-        self.write_workflow("a-producer", produces={"orders": ["consumer"]})
-        self.write_workflow("consumer", requires=["orders"])
-        self.write_workflow("producer", forward=["BASE_URL"],
+        self.write_job("a-producer", produces={"orders": ["consumer"]})
+        self.write_job("consumer", requires=["orders"])
+        self.write_job("producer", forward=["BASE_URL"],
                             produces={"orders": ["consumer"]}, recommended=["orders"])
         output = io.StringIO()
         with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
-            # top-level, workflow (consumer=1), producer picker (producer=1), base URL (0)
+            # top-level, job (consumer=1), producer picker (producer=1), base URL (0)
             with self.record_menus(0, 1, 1, 0) as calls, patch("sys.stdout", output):
                 with patch("builtins.input", return_value="y") as prompt:
                     rc = run_menu(self.root)
@@ -294,7 +294,7 @@ class MenuTests(unittest.TestCase):
         self.write_pair()
         output = io.StringIO()
         with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
-            # top-level, workflow (consumer=0), producer picker (0)
+            # top-level, job (consumer=0), producer picker (0)
             with self.record_menus(0, 0, 0), patch("sys.stdout", output):
                 with patch("builtins.input", return_value="n"):
                     rc = run_menu(self.root)
@@ -304,8 +304,8 @@ class MenuTests(unittest.TestCase):
         self.assertNotIn("ready", output.getvalue())
 
     def test_optional_source_picker_default_runs_without_data_env(self) -> None:
-        self.write_workflow("producer", produces={"orders": ["consumer"]})
-        self.write_workflow("consumer", optional=["orders"])
+        self.write_job("producer", produces={"orders": ["consumer"]})
+        self.write_job("consumer", optional=["orders"])
         (self.root / "data").mkdir()
         (self.root / "data" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
         with self.record_menus(0, 0, 0) as calls:
@@ -318,8 +318,8 @@ class MenuTests(unittest.TestCase):
         self.assertFalse(any(argument.startswith("DATA_ORDERS_CSV=") for argument in call))
 
     def test_unavailable_source_picker_reports_terminal_needed(self) -> None:
-        self.write_workflow("producer", produces={"orders": ["consumer"]})
-        self.write_workflow("consumer", optional=["orders"])
+        self.write_job("producer", produces={"orders": ["consumer"]})
+        self.write_job("consumer", optional=["orders"])
         (self.root / "data").mkdir()
         (self.root / "data" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
         errors = io.StringIO()
@@ -332,8 +332,8 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(self.fake_docker_calls(), [])
 
     def test_optional_source_picker_file_injects_data_env(self) -> None:
-        self.write_workflow("producer", produces={"orders": ["consumer"]})
-        self.write_workflow("consumer", optional=["orders"])
+        self.write_job("producer", produces={"orders": ["consumer"]})
+        self.write_job("consumer", optional=["orders"])
         (self.root / "data").mkdir()
         (self.root / "data" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
         with self.record_menus(0, 0, 1):
@@ -354,8 +354,8 @@ class MenuTests(unittest.TestCase):
         self.assertIn("/scripts/consumer.js", call)
 
     def test_plan_stop_without_cancel_fails_before_docker(self) -> None:
-        self.write_workflow("consumer", requires=["orders"])
-        self.write_workflow("producer", produces={"orders": ["consumer"]}, requires=["orders"])
+        self.write_job("consumer", requires=["orders"])
+        self.write_job("producer", produces={"orders": ["consumer"]}, requires=["orders"])
         stderr = io.StringIO()
         # consumer=0, producer picker → producer (0), producer needs orders → producer again (0)
         with self.record_menus(0, 0, 0, 0) as calls, patch("sys.stderr", stderr):
@@ -366,14 +366,14 @@ class MenuTests(unittest.TestCase):
         self.assertIn("[punch] producer cycle: consumer → producer → producer", stderr.getvalue())
 
     def test_broken_catalog_fails_before_docker(self) -> None:
-        self.write_workflow("producer", produces={"orders": ["ghost"]})
+        self.write_job("producer", produces={"orders": ["ghost"]})
         with self.select_menu(0, 0):
             rc = run_menu(self.root)
         self.assertEqual(rc, 1)
         self.assertEqual(self.fake_docker_calls(), [])
 
     def test_current_target_defaults_to_docker_host_json_when_base_url_unset(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_job("fixture", forward=["BASE_URL"])
         os.environ.pop("BASE_URL", None)
         with self.select_menu(0, 0, 0):
             rc = run_menu(self.root)
@@ -382,7 +382,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
 
     def test_env_base_url_takes_precedence_over_docker_host_json(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_job("fixture", forward=["BASE_URL"])
         with patch.dict(os.environ, {"BASE_URL": "http://current.invalid"}):
             with self.select_menu(0, 0, 0):
                 rc = run_menu(self.root)
@@ -391,10 +391,10 @@ class MenuTests(unittest.TestCase):
         self.assertIn("BASE_URL=http://current.invalid", call)
 
     def test_current_target_defaults_to_a_service_specific_host_json(self) -> None:
-        """A workflow on a non-'k6' compose service (e.g. a browser variant)
+        """A job on a non-'k6' compose service (e.g. a browser variant)
         must not default to docker-host.json's BASE_URL — that file is only
         ever a valid target for the plain 'k6' service."""
-        self.write_workflow("fixture", forward=["BASE_URL"], service="k6-browser")
+        self.write_job("fixture", forward=["BASE_URL"], service="k6-browser")
         os.environ.pop("BASE_URL", None)
         with self.select_menu(0, 0, 0):
             rc = run_menu(self.root)
@@ -403,7 +403,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn(f"BASE_URL={DEFAULT_BROWSER_BASE_URL}", call)
 
     def test_current_target_falls_back_to_docker_host_json_for_unknown_service(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"], service="k6-otel")
+        self.write_job("fixture", forward=["BASE_URL"], service="k6-otel")
         os.environ.pop("BASE_URL", None)
         with self.select_menu(0, 0, 0):
             rc = run_menu(self.root)
@@ -411,12 +411,12 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", call)
 
-    def test_workflow_table_rows_are_the_selectable_entries(self) -> None:
-        self.write_workflow(
+    def test_job_table_rows_are_the_selectable_entries(self) -> None:
+        self.write_job(
             "cart-fulfill", produces={"carts": ["place-order"]}, description="Fills carts."
         )
-        self.write_workflow("place-order", requires=["carts"])
-        self.write_workflow("smoke")
+        self.write_job("place-order", requires=["carts"])
+        self.write_job("smoke")
         calls: list[tuple[list[str], str]] = []
         results = [_SelectedMenu(0), _SelectedMenu(None)]
 
@@ -442,13 +442,13 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rows[2].split()[0], "smoke")
         self.assertNotIn("Fills carts.", output.getvalue())
 
-    def test_workflow_table_rows_fit_an_80_column_terminal(self) -> None:
-        self.write_workflow(
+    def test_job_table_rows_fit_an_80_column_terminal(self) -> None:
+        self.write_job(
             "purchase-flow-browser",
             description="Full purchase journey through a real Chromium tab.",
         )
-        self.write_workflow("producer", produces={"orders": ["consumer"]})
-        self.write_workflow("consumer", requires=["orders"])
+        self.write_job("producer", produces={"orders": ["consumer"]})
+        self.write_job("consumer", requires=["orders"])
         calls: list[tuple[list[str], str]] = []
         results = [_SelectedMenu(0), _SelectedMenu(None)]
 
@@ -468,10 +468,10 @@ class MenuTests(unittest.TestCase):
             self.assertIn(column, header)
         self.assertLessEqual(max(cell_len(line) for line in [header, *rows]), 78)
 
-    def test_workflow_table_marks_optional_inputs(self) -> None:
-        self.write_workflow("producer", produces={"owned-orders": ["consumer"]})
-        self.write_workflow("other", produces={"carts": ["consumer"]})
-        self.write_workflow("consumer", requires=["carts"], optional=["owned-orders"])
+    def test_job_table_marks_optional_inputs(self) -> None:
+        self.write_job("producer", produces={"owned-orders": ["consumer"]})
+        self.write_job("other", produces={"carts": ["consumer"]})
+        self.write_job("consumer", requires=["carts"], optional=["owned-orders"])
         calls: list[tuple[list[str], str]] = []
         results = [_SelectedMenu(0), _SelectedMenu(None)]
 
@@ -489,9 +489,9 @@ class MenuTests(unittest.TestCase):
         consumer = next(row for row in rows if row.startswith("consumer"))
         self.assertIn("carts, owned-orders?", consumer)
 
-    def test_workflow_table_rows_fit_a_narrow_controlling_terminal(self) -> None:
-        self.write_workflow(
-            "wide-unicode-workflow",
+    def test_job_table_rows_fit_a_narrow_controlling_terminal(self) -> None:
+        self.write_job(
+            "wide-unicode-job",
             description="東京でコーヒーを淹れる ☕️",
         )
         calls: list[tuple[list[str], str]] = []
@@ -514,8 +514,8 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(rows[0].count("│"), 3)
         self.assertLessEqual(max(cell_len(line) for line in [header, *rows]), 38)
 
-    def test_workflow_menu_flattens_control_whitespace_and_escapes_pipes(self) -> None:
-        self.write_workflow(
+    def test_job_menu_flattens_control_whitespace_and_escapes_pipes(self) -> None:
+        self.write_job(
             "fixture",
             description='"Coffee | tea\\nsecond\\tline"',
         )
@@ -535,7 +535,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn(r"Coffee \| tea second line", rows[0])
         self.assertFalse(any(character in rows[0] for character in "\n\r\t"))
 
-    def test_invalid_workflow_error_stays_on_one_selectable_row(self) -> None:
+    def test_invalid_job_error_stays_on_one_selectable_row(self) -> None:
         (self.root / "broken.yaml").write_text("apiVersion: [", encoding="utf-8")
         calls: list[tuple[list[str], str]] = []
         results = [_SelectedMenu(0), _SelectedMenu(None)]
@@ -554,15 +554,15 @@ class MenuTests(unittest.TestCase):
         self.assertFalse(any(character in rows[0] for character in "\n\r\t"))
 
     def test_monitoring_setup_is_a_stub(self) -> None:
-        self.write_workflow("fixture")
+        self.write_job("fixture")
         with self.select_menu(1):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
 
-    def test_second_workflow_is_selected_from_sorted_menu(self) -> None:
-        self.write_workflow("alpha")
-        self.write_workflow("beta")
+    def test_second_job_is_selected_from_sorted_menu(self) -> None:
+        self.write_job("alpha")
+        self.write_job("beta")
         with self.select_menu(0, 1):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
@@ -571,29 +571,29 @@ class MenuTests(unittest.TestCase):
         [call] = calls
         self.assertIn("/scripts/beta.js", call)
 
-    def test_canceling_top_level_menu_does_not_run_workflow(self) -> None:
-        self.write_workflow("fixture")
+    def test_canceling_top_level_menu_does_not_run_job(self) -> None:
+        self.write_job("fixture")
         with self.select_menu(None):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
 
-    def test_canceling_workflow_menu_does_not_run_workflow(self) -> None:
-        self.write_workflow("fixture")
+    def test_canceling_job_menu_does_not_run_job(self) -> None:
+        self.write_job("fixture")
         with self.select_menu(0, None):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
 
-    def test_canceling_target_menu_does_not_run_workflow(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+    def test_canceling_target_menu_does_not_run_job(self) -> None:
+        self.write_job("fixture", forward=["BASE_URL"])
         with self.select_menu(0, 0, None):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
 
     def test_menu_without_terminal_fails_cleanly_before_docker(self) -> None:
-        self.write_workflow("fixture")
+        self.write_job("fixture")
         with patch("sys.stdin", _ConfirmedTerminal()):
             with patch("punch.menu.TerminalMenu") as menu_class:
                 menu_class.return_value.show.side_effect = OSError("no terminal")
@@ -602,7 +602,7 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(self.fake_docker_calls(), [])
 
     def test_unsupported_terminal_fails_cleanly_before_docker(self) -> None:
-        self.write_workflow("fixture")
+        self.write_job("fixture")
         with patch("sys.stdin", _ConfirmedTerminal()):
             with patch("punch.menu.TerminalMenu", side_effect=NotImplementedError("TERM unset")):
                 rc = run_menu(self.root)
@@ -610,7 +610,7 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(self.fake_docker_calls(), [])
 
     def test_redirected_stdin_cannot_skip_docker_confirmation(self) -> None:
-        self.write_workflow("fixture")
+        self.write_job("fixture")
         with patch("sys.stdin", io.StringIO()):
             with patch("punch.menu.TerminalMenu", side_effect=[_SelectedMenu(0), _SelectedMenu(0)]):
                 rc = run_menu(self.root)
@@ -635,7 +635,7 @@ class MenuTests(unittest.TestCase):
         )
 
     def test_options_preset_is_passed_as_k6_config(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_job("fixture", forward=["BASE_URL"])
         preset = self.write_options("5-iterations", ITERATIONS_5)
         with self.select_menu(0, 0, 0, 1):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
@@ -643,10 +643,10 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertRunsWithConfig(call, preset)
 
-    def test_workflow_default_entry_keeps_spec_config(self) -> None:
+    def test_job_default_entry_keeps_spec_config(self) -> None:
         default = self.write_options("5-iterations", ITERATIONS_5)
         self.write_options("5-vu-5m", CONSTANT_5_VUS_5M)
-        self.write_workflow("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
+        self.write_job("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
         with self.select_menu(0, 0, 0, 0):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
@@ -654,48 +654,48 @@ class MenuTests(unittest.TestCase):
         self.assertRunsWithConfig(call, default)
 
     def test_missing_options_dir_skips_step(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+        self.write_job("fixture", forward=["BASE_URL"])
         with self.select_menu(0, 0, 0):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertNotIn("--config", call)
 
-    def test_options_step_is_offered_to_workflows_forwarding_only_base_url(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+    def test_options_step_is_offered_to_jobs_forwarding_only_base_url(self) -> None:
+        self.write_job("fixture", forward=["BASE_URL"])
         self.write_options("5-iterations", ITERATIONS_5)
         with self.record_menus(0, 0, 0, 0) as calls:
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
-        self.assertEqual(calls[3][0], ["Workflow default (script options)", "5-iterations"])
+        self.assertEqual(calls[3][0], ["Job default (script options)", "5-iterations"])
         [call] = self.fake_docker_calls()
         self.assertNotIn("--config", call)
 
-    def test_options_menu_starts_on_the_workflow_default(self) -> None:
+    def test_options_menu_starts_on_the_job_default(self) -> None:
         self.write_options("1-iteration", {"iterations": 1})
         self.write_options("5-iterations", ITERATIONS_5)
-        self.write_workflow("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
+        self.write_job("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
         with self.record_menus(0, 0, 0, 0) as calls:
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
         entries, options = calls[-1]
-        self.assertEqual(entries, ["Workflow default (5-iterations)", "1-iteration", "5-iterations"])
+        self.assertEqual(entries, ["Job default (5-iterations)", "1-iteration", "5-iterations"])
         self.assertEqual(options["cursor_index"], 0)
 
-    def test_canceling_options_menu_does_not_run_workflow(self) -> None:
-        self.write_workflow("fixture", forward=["BASE_URL"])
+    def test_canceling_options_menu_does_not_run_job(self) -> None:
+        self.write_job("fixture", forward=["BASE_URL"])
         self.write_options("5-iterations", ITERATIONS_5)
         with self.select_menu(0, 0, 0, None):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
 
-    def test_malformed_options_json_warns_and_uses_the_workflow_default(self) -> None:
+    def test_malformed_options_json_warns_and_uses_the_job_default(self) -> None:
         default = self.write_options("5-iterations", ITERATIONS_5)
         self.write_options("broken", "not json")
-        self.write_workflow("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
+        self.write_job("fixture", forward=["BASE_URL"], config="options/5-iterations.json")
         errors = io.StringIO()
-        # entries: workflow default, 5-iterations, broken
+        # entries: job default, 5-iterations, broken
         with self.select_menu(0, 0, 0, 2), patch("sys.stderr", errors):
             rc = run_menu(self.root, options_dir=self.root_options_dir())
         self.assertEqual(rc, 0)
@@ -703,14 +703,14 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertRunsWithConfig(call, default)
 
-    def test_default_options_dir_is_sibling_of_workflows_dir(self) -> None:
-        workflows_dir = self.root / "workflows"
-        workflows_dir.mkdir()
+    def test_default_options_dir_is_sibling_of_jobs_dir(self) -> None:
+        jobs_dir = self.root / "jobs"
+        jobs_dir.mkdir()
         import shutil
 
-        shutil.copy(self.root / "docker-compose.yml", workflows_dir / "docker-compose.yml")
-        (workflows_dir / "fixture.yaml").write_text(
-            WORKFLOW_TEMPLATE.format(
+        shutil.copy(self.root / "docker-compose.yml", jobs_dir / "docker-compose.yml")
+        (jobs_dir / "fixture.yaml").write_text(
+            JOB_TEMPLATE.format(
                 name="fixture",
                 description="",
                 service="k6",
@@ -724,7 +724,7 @@ class MenuTests(unittest.TestCase):
         preset = options_dir / "5-iterations.json"
         preset.write_text(json.dumps(ITERATIONS_5), encoding="utf-8")
         with self.select_menu(0, 0, 0, 1):
-            rc = run_menu(workflows_dir)
+            rc = run_menu(jobs_dir)
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertRunsWithConfig(call, preset)
@@ -733,11 +733,11 @@ class MenuTests(unittest.TestCase):
     SIZED_PRODUCER = {"iterationSeconds": 1, "maxSeconds": 270}
 
     def write_sized_pair(self, *, presets: bool = True) -> None:
-        self.write_workflow(
+        self.write_job(
             "producer", forward=["BASE_URL"],
             produces={"orders": ["consumer"]}, sizing=self.SIZED_PRODUCER,
         )
-        self.write_workflow(
+        self.write_job(
             "consumer", forward=["BASE_URL"],
             requires=["orders"], sizing={"margin": 0.15},
         )
@@ -773,11 +773,11 @@ class MenuTests(unittest.TestCase):
 
     def test_sized_run_writes_a_producer_config_without_asking(self) -> None:
         self.write_sized_pair()
-        # top-level, workflow (producer=1), base URL (0), mode (size=1), preset (5-iterations=0)
+        # top-level, job (producer=1), base URL (0), mode (size=1), preset (5-iterations=0)
         rc, calls, text, prompt = self.run_sized(0, 1, 0, 1, 0)
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 5)
-        self.assertEqual(calls[3][0], ["Options as usual", "Size for a target workflow"])
+        self.assertEqual(calls[3][0], ["Options as usual", "Size for a target job"])
         self.assertEqual(calls[3][1]["title"], "Load options:")
         self.assertEqual(
             calls[4][0],
@@ -807,7 +807,7 @@ class MenuTests(unittest.TestCase):
 
     def test_target_preset_cursor_starts_on_the_target_config(self) -> None:
         self.write_sized_pair()
-        self.write_workflow(
+        self.write_job(
             "consumer", forward=["BASE_URL"], requires=["orders"],
             sizing={"iterationSeconds": 2, "margin": 0.15}, config="options/5-vu-5m.json",
         )
@@ -847,7 +847,7 @@ class MenuTests(unittest.TestCase):
         rc, calls, text, prompt = self.run_sized(0, 1, 0, 0, 1)
         self.assertEqual(rc, 0)
         self.assertEqual(
-            calls[4][0], ["Workflow default (script options)", "5-iterations", "5-vu-5m"]
+            calls[4][0], ["Job default (script options)", "5-iterations", "5-vu-5m"]
         )
         self.assertIn('Write "orders" data for consumer?', prompt.call_args_list[0].args[0])
         [call] = self.fake_docker_calls()
@@ -863,10 +863,10 @@ class MenuTests(unittest.TestCase):
 
     def test_switched_producer_gets_the_same_mode_picker(self) -> None:
         self.write_sized_pair()
-        # top-level, workflow (consumer=0), producer picker (0), base URL (0), mode (1), preset (0)
+        # top-level, job (consumer=0), producer picker (0), base URL (0), mode (1), preset (0)
         rc, calls, text, prompt = self.run_sized(0, 0, 0, 0, 1, 0)
         self.assertEqual(rc, 0)
-        self.assertEqual(calls[4][0], ["Options as usual", "Size for a target workflow"])
+        self.assertEqual(calls[4][0], ["Options as usual", "Size for a target job"])
         prompt.assert_not_called()
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/producer.js", call)
@@ -876,15 +876,15 @@ class MenuTests(unittest.TestCase):
 
     def test_target_picker_lists_each_sized_target(self) -> None:
         self.write_sized_pair()
-        self.write_workflow(
+        self.write_job(
             "producer", forward=["BASE_URL"],
             produces={"orders": ["consumer", "other"]}, sizing=self.SIZED_PRODUCER,
         )
-        self.write_workflow(
+        self.write_job(
             "other", forward=["BASE_URL"],
             requires=["orders"], sizing={},
         )
-        # workflows sorted: consumer, other, producer=2; target picker other=1
+        # jobs sorted: consumer, other, producer=2; target picker other=1
         rc, calls, text, _ = self.run_sized(0, 2, 0, 1, 1, 0, rows=5)
         self.assertEqual(rc, 0)
         self.assertEqual(calls[4][0], ['"orders" for consumer', '"orders" for other'])

@@ -16,14 +16,14 @@ Always on. Layer diagram:
 | Docker Compose | services, image names, ports, env, healthchecks, volumes | `docker-compose.yml` |
 | Dockerfiles | how each service is built | `docker/*.Dockerfile` |
 | Service code | gateway / catalog / orders behavior | `src/services/**` |
-| Consumer workload | workflow YAML, k6 scenarios, thresholds, `handleSummary`, checks | consumer `workflows/**/*.yaml`, `src/tests/**` |
+| Consumer workload | job YAML, k6 scenarios, thresholds, `handleSummary`, checks | consumer `jobs/**/*.yaml`, `src/tests/**` |
 | Artifacts | contract between runtime and readers | `reports/**` |
 
 ## Rules
 
 - **Python owns orchestration.** What to run, in what order, with what
   evidence lives in `src/punch/`, never in Bash or k6.
-- **Consumer workloads stay consumer-owned.** Consumer repositories own workflow YAML and k6 scripts. Punch owns the reusable `src/punch/` engine; this repository's bundled workflows and tests are fixtures.
+- **Consumer workloads stay consumer-owned.** Consumer repositories own job YAML and k6 scripts. Punch owns the reusable `src/punch/` engine; this repository's bundled jobs and tests are fixtures.
 - **Compose owns runtime boundaries.** Service names, ports, env vars,
   dependencies, and volumes are contracts; renames cascade.
 - **k6 owns test behavior only.** No containers, no polling, no writes

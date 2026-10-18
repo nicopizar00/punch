@@ -15,7 +15,7 @@ Scope: `src/tests/`.
   `@lib` / `@utils` / `@app-types` aliases.
 - **Configurable target.** Read `__ENV.TARGET_BASE_URL`; an in-network
   default (`http://gateway-api:3000`) must work with no env vars, unless the
-  workflow lists the variable under `environment.required`. Never hardcode
+  job lists the variable under `environment.required`. Never hardcode
   external URLs.
 - **Thresholds are the gate.** Gate and journey tests declare
   `http_req_failed`, an `http_req_duration` percentile, and `checks`

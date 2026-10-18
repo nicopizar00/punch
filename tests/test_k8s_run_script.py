@@ -50,7 +50,7 @@ class K6RunScriptTests(unittest.TestCase):
         self.stderr_file.write_text(stderr)
         env = {
             "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
-            "PUNCH_WORKFLOW": "http-orders",
+            "PUNCH_JOB": "http-orders",
             "PUNCH_SCRIPT": "/scripts/scenarios/http-orders/http-orders.js",
             "PUNCH_DATA_DIR": str(self.data),
             "PUNCH_OUT_DIR": str(self.out),
@@ -139,9 +139,9 @@ class K6RunScriptTests(unittest.TestCase):
         )
         self.assertFalse(self.k6_ran())
 
-    def test_missing_dataset_without_hint_names_no_known_workflow(self) -> None:
+    def test_missing_dataset_without_hint_names_no_known_job(self) -> None:
         result = self.run_script(requires="carts")
-        self.assertIn("produce it with: no known workflow (--produce carts)", result.stderr)
+        self.assertIn("produce it with: no known job (--produce carts)", result.stderr)
 
     def test_header_only_dataset_fails_preflight(self) -> None:
         (self.data / "carts.csv").write_text("cartId,productId,sid\n\n")

@@ -1,12 +1,12 @@
 # Punch on Kubernetes
 
-A second, Kubernetes-native runtime for Punch workflows
+A second, Kubernetes-native runtime for Punch jobs
 ([ADR 0006](../docs/decisions/0006-kubernetes-runtime.md)). Argo Workflows
 runs the step and moves artifacts through S3; a POSIX shell step ports
 Punch's core data contract. No Python and no Punch image run in the cluster.
 The compose runtime (`punch run`) is unchanged. How each `punch run` step
-maps here, the CI design (GitHub workflows, chains), dataset lifetime, design
-gaps, weak points against k6 practice, and other clouds:
+maps here, the CI design (GitHub workflows for jobs and Punch workflows),
+dataset lifetime, design gaps, weak points against k6 practice, and other clouds:
 [orchestrator to Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md).
 
 | File | Holds |
@@ -22,7 +22,7 @@ gaps, weak points against k6 practice, and other clouds:
 
 | Parameter | Required | Example | Meaning |
 | --- | --- | --- | --- |
-| `workflow` | yes | `http-orders` | Workflow id, used in messages |
+| `job` | yes | `http-orders` | Job id, used in messages |
 | `script` | yes | `/scripts/scenarios/http-orders/http-orders.js` | k6 entry in the consumer image |
 | `base-url` | yes | `http://bff.shop.svc.cluster.local:3001` | `BASE_URL` |
 | `config` | no | `5-iterations` | Preset → `k6 run --config /punch/options/<config>.json` |
@@ -42,7 +42,7 @@ and `DATA_<DATASET>_CSV=/scripts/data/<dataset>.csv` per required dataset
 1. **Validate** — an undeclared `produce` entry, an `extra-env` name outside
    `forward`, or more than one `requires` dataset exits 2 before anything runs.
 2. **Preflight** — a required dataset that is missing or has no row after its
-   header exits 1: `<workflow> requires "<ds>"; produce it with: <producers>
+   header exits 1: `<job> requires "<ds>"; produce it with: <producers>
    (--produce <ds>)`.
 3. **Run** — k6's stdout is teed to `/punch/out/stdout.log`; stderr goes only
    to the pod log and is never harvested. A non-zero k6 exit ends the step
@@ -132,8 +132,8 @@ data:
 ```
 
 The `k6` template was verified on minikube with Argo Workflows v4.1.5 and
-SeaweedFS 4.48 as the S3 store, on 2026-10-13, including a producer to
-consumer chain and a failed producer that left the previous dataset in place.
+SeaweedFS 4.48 as the S3 store, on 2026-10-13, including a producer job
+followed by its consumer job and a failed producer that left the previous dataset in place.
 The `k6-browser` template has not run on a cluster yet. On that 4.5 GB
 cluster, Argo's full-validation CRDs (about 12 MB of schemas) drove
 kube-apiserver and Argo CD's application controller out of memory; the
@@ -148,7 +148,7 @@ namespace: perf
 resources:
   - <path>/punch/k8s
   - artifact-repositories.yaml   # default S3 repository for this namespace
-  - workflows/http-orders.yaml   # thin templates calling punch-k6-run
+  - jobs/http-orders.yaml   # thin templates calling punch-k6-run
 configurations:
   - <path>/punch/k8s/kustomizeconfig.yaml
 images:
@@ -165,7 +165,7 @@ generatorOptions:
   disableNameSuffixHash: true
 ```
 
-A thin template runs one workflow:
+A thin template runs one job:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -187,7 +187,7 @@ spec:
             templateRef: { name: punch-k6-run, template: k6 }
             arguments:
               parameters:
-                - { name: workflow, value: http-orders }
+                - { name: job, value: http-orders }
                 - { name: script, value: /scripts/scenarios/http-orders/http-orders.js }
                 - { name: config, value: "{{workflow.parameters.config}}" }
                 - { name: base-url, value: "{{workflow.parameters.base-url}}" }
@@ -203,28 +203,28 @@ Render with `kubectl kustomize --load-restrictor LoadRestrictionsNone` when
 the base or presets live outside the kustomization root, and apply with
 `--server-side` (Argo's CRDs exceed the client-side annotation limit).
 
-## From a workflow YAML to a thin template
+## From a job YAML to a thin template
 
-The cluster never reads the workflow YAML. Each thin template restates one
-workflow's facts, field by field:
+The cluster never reads the job YAML. Each thin template restates one
+job's facts, field by field:
 
-| Workflow YAML | Thin template |
+| Job YAML | Thin template |
 | --- | --- |
-| `metadata.name` | `metadata.name` and the step's `workflow` |
+| `metadata.name` | `metadata.name` and the step's `job` |
 | `spec.compose.service` | `templateRef.template`: `k6`, or `k6-browser` when the service runs the k6 browser image |
 | `spec.k6.script` | `script`, the same absolute container path |
-| `spec.k6.config` | Default of the `config` workflow parameter: the file name without `.json`. The file itself becomes a key of `punch-k6-options` |
+| `spec.k6.config` | Default of the `config` Argo workflow parameter: the file name without `.json`. The file itself becomes a key of `punch-k6-options` |
 | `spec.environment.forward` | `forward`: every name except `BASE_URL`, space-separated |
-| `BASE_URL`, forwarded from the host | Default of the `base-url` workflow parameter: the target's in-cluster URL |
+| `BASE_URL`, forwarded from the host | Default of the `base-url` Argo workflow parameter: the target's in-cluster URL |
 | `spec.data.requires` | `requires`: at most one dataset |
-| The producers of each required dataset among the sibling workflow files | `requires-hint`: `<dataset>=<producer>,<producer>` |
+| The producers of each required dataset among the sibling job files | `requires-hint`: `<dataset>=<producer>,<producer>` |
 | `spec.data.produces[].dataset` and `.columns` | `produces`: `<dataset>=<column>,<column>`, space-separated |
 
 The workflow parameters `config`, `produce`, `base-url`, and `extra-env` pass
 through to the step as `{{workflow.parameters.<name>}}`, so a run can
 override them at submit time. `produce` and `extra-env` default to empty.
 
-These workflow fields have no Kubernetes equivalent:
+These job fields have no Kubernetes equivalent:
 
 - `spec.environment.required`: the step does not check that a name is set.
 - `spec.data.optional`: the template downloads only the `requires` dataset.
@@ -239,13 +239,13 @@ These workflow fields have no Kubernetes equivalent:
 - `spec.workingDirectory` and `spec.compose.file`: the kustomization's
   `images:` entries take their place.
 
-Nothing keeps a thin template equal to its workflow YAML at run time. A
-consumer pins the pair with a unit test that loads each workflow with
-`punch.workflow.load_workflow`, derives `requires-hint` from
-`punch.catalog.load_catalog(<workflows dir>).producers_of(<dataset>)`, and
+Nothing keeps a thin template equal to its job YAML at run time. A
+consumer pins the pair with a unit test that loads each job with
+`punch.job.load_job`, derives `requires-hint` from
+`punch.catalog.load_catalog(<jobs dir>).producers_of(<dataset>)`, and
 compares the result with the thin template row by row.
 
-## Run a workflow
+## Run a job
 
 Create a Workflow that references the thin template. Parameters left out
 keep the template's defaults:
@@ -302,7 +302,7 @@ log sit under `runs/<run>/` in the bucket. To stop a run:
 kubectl -n perf patch workflow <run> --type merge -p '{"spec":{"shutdown":"Stop"}}'
 ```
 
-### Chain workflows through datasets
+### Run a Punch workflow through datasets
 
 Every run in a namespace reads and writes the same `datasets/` prefix of its
 artifact repository. A producer run with `produce=<dataset>` replaces
@@ -317,8 +317,8 @@ above:
    k6 starts.
 
 Datasets in the bucket and the compose runtime's local data files are
-separate stores. The CI design chains inside one Workflow instead
-([chain on Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#punch-workflow-on-kubernetes)).
+separate stores. The CI design runs a Punch workflow inside one Argo Workflow instead
+([Punch workflow on Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#punch-workflow-on-kubernetes)).
 
 ## Sync with Argo CD
 
@@ -379,7 +379,7 @@ piece.
 ## Trigger from CI
 
 Punch ships no CI job for this runtime. The design, with GitHub workflows
-for one Punch workflow or a chain, OIDC instead of keys, and runs created only
+for one Punch job or a Punch workflow, OIDC instead of keys, and runs created only
 after Argo CD has synced the commit, is in
 [orchestrator to Kubernetes](../docs/architecture/orchestrator-to-kubernetes.md#github-actions).
 CI never applies the kustomization.
@@ -392,7 +392,7 @@ CI never applies the kustomization.
 | Step pod in `ImagePullBackOff` | The tag is missing from the registry, or the nodes cannot reach it. The run fails at the 900 s timeout. |
 | `requires "<dataset>"; produce it with: ...` | `datasets/<dataset>.csv` is missing or has no rows. Run a named producer with `produce=<dataset>`. |
 | Exit 2 with `does not produce`, `does not forward`, or `is not NAME=VALUE` | A submit parameter breaks the thin template's declarations; the message names it. k6 did not start. |
-| Exit 2 with `supports one required dataset per workflow` | The thin template lists more than one dataset in `requires`. |
+| Exit 2 with `supports one required dataset per job` | The thin template lists more than one dataset in `requires`. |
 | Exit 99 | k6 thresholds failed. Read the pod log. |
 | `expected <n> columns, got "..."` | A `[DATA]` payload has the wrong field count. A quoted comma still counts as a separator here. |
 | `no [DATA <dataset>] records were produced` | `produce` opted in a dataset the run emitted no rows for. Nothing was published. |

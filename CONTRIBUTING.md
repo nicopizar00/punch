@@ -12,9 +12,9 @@
 - Target `main`. One feature or fix per PR.
 - Use the issue and PR templates.
 - Include how to verify. Runtime changes need `./bin/punch run smoke` (or the
-  affected workflow) with `reports/state/punch-run.json` showing
+  affected Punch job) with `reports/state/punch-run.json` showing
   `"passed": true`; doc-only changes need diff review. See
-  [validation.md](docs/workflows/validation.md).
+  [validation.md](docs/jobs/validation.md).
 - Update README / CHANGELOG when behavior or a public interface changes.
 
-Usage and workflow YAML: [README.md](README.md). Rules: [CLAUDE.md](CLAUDE.md).
+Usage and job YAML: [README.md](README.md). Rules: [CLAUDE.md](CLAUDE.md).

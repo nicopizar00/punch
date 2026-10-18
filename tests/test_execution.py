@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from punch.execution import (
     ExecutionResult,
     build_compose_run_command,
-    execute_workflow,
+    execute_job,
 )
-from punch.workflow import load_workflow
+from punch.job import load_job
 
 
 FAKE_DOCKER = """#!/usr/bin/env python3
@@ -97,8 +97,8 @@ class ExecutionTests(unittest.TestCase):
         shutil.copy(fixtures / "docker-compose.yml", self.root / "docker-compose.yml")
         shutil.copy(fixtures / "data-output.yaml", self.root / "data-output.yaml")
         shutil.copy(fixtures / "data-input.yaml", self.root / "data-input.yaml")
-        self.workflow = load_workflow(self.root / "data-output.yaml")
-        self.consumer = load_workflow(self.root / "data-input.yaml")
+        self.job = load_job(self.root / "data-output.yaml")
+        self.consumer = load_job(self.root / "data-input.yaml")
         consumer_text = (self.root / "data-input.yaml").read_text(encoding="utf-8")
         (self.root / "data-optional.yaml").write_text(
             consumer_text.replace("name: data-consumer", "name: data-optional").replace(
@@ -106,13 +106,13 @@ class ExecutionTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self.optional_consumer = load_workflow(self.root / "data-optional.yaml")
+        self.optional_consumer = load_job(self.root / "data-optional.yaml")
         self.carts_path = self.root / "data" / "carts.csv"
 
         producer_text = (self.root / "data-output.yaml").read_text(encoding="utf-8")
         no_data = producer_text[: producer_text.index("  data:\n")]
         (self.root / "no-data.yaml").write_text(no_data, encoding="utf-8")
-        self.no_csv_workflow = load_workflow(self.root / "no-data.yaml")
+        self.no_csv_job = load_job(self.root / "no-data.yaml")
 
         self.bin_path = self.root / "bin"
         self.bin_path.mkdir()
@@ -135,7 +135,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_builds_one_explicit_compose_run_with_allowlisted_environment(self) -> None:
         command = build_compose_run_command(
-            self.workflow,
+            self.job,
             {"BASE_URL": "http://target", "RUN_ID": "run-7", "SECRET": "ignored"},
         )
         self.assertEqual(command.count("run"), 2)
@@ -152,15 +152,15 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(command[-3:], ["k6", "run", "/scripts/data-producer.js"])
 
     def test_missing_required_environment_fails_before_subprocess(self) -> None:
-        result = execute_workflow(self.workflow, environment={}, produce=("carts",))
+        result = execute_job(self.job, environment={}, produce=("carts",))
         self.assertFalse(result.passed)
         self.assertIn("RUN_ID", result.failure)
         self.assertFalse(self.args_path.exists())
 
     def run_producer(self, stdout_lines: list[str], *, produce=("carts",), exit_code: int = 0):
         env = {**self.env, "FAKE_STDOUT": "|".join(stdout_lines), "FAKE_EXIT_CODE": str(exit_code)}
-        return execute_workflow(
-            self.workflow,
+        return execute_job(
+            self.job,
             environment=env,
             produce=produce,
             stdout=io.StringIO(),
@@ -254,8 +254,8 @@ class ExecutionTests(unittest.TestCase):
             "FAKE_STDOUT": "[DATA carts] c1,p1,s1",
             "FAKE_STDERR": "[DATA carts] e,e,e",
         }
-        result = execute_workflow(
-            self.workflow, environment=env, produce=("carts",),
+        result = execute_job(
+            self.job, environment=env, produce=("carts",),
             stdout=io.StringIO(), stderr=io.StringIO(),
         )
         self.assertTrue(result.passed, result.failure)
@@ -263,13 +263,13 @@ class ExecutionTests(unittest.TestCase):
 
     def test_validate_produce_expands_all_and_rejects_unknown(self) -> None:
         from punch.execution import validate_produce
-        self.assertEqual(validate_produce(self.workflow, ["all"]), ("carts",))
-        self.assertEqual(validate_produce(self.workflow, []), ())
-        self.assertEqual(validate_produce(self.workflow, ["carts", "carts"]), ("carts",))
+        self.assertEqual(validate_produce(self.job, ["all"]), ("carts",))
+        self.assertEqual(validate_produce(self.job, []), ())
+        self.assertEqual(validate_produce(self.job, ["carts", "carts"]), ("carts",))
         with self.assertRaisesRegex(ValueError, 'data-producer does not produce "orders"'):
-            validate_produce(self.workflow, ["orders"])
+            validate_produce(self.job, ["orders"])
         with self.assertRaisesRegex(ValueError, 'does not produce "carts"'):
-            validate_produce(self.no_csv_workflow, ["carts"])
+            validate_produce(self.no_csv_job, ["carts"])
 
     def test_unknown_produce_fails_before_subprocess(self) -> None:
         result = self.run_producer(["[DATA carts] c,p,s"], produce=("orders",))
@@ -292,8 +292,8 @@ class ExecutionTests(unittest.TestCase):
         for alias_name, log_path in aliases:
             with self.subTest(alias=alias_name):
                 self.args_path.unlink(missing_ok=True)
-                result = execute_workflow(
-                    self.workflow, environment=self.env, produce=("carts",), log_path=log_path
+                result = execute_job(
+                    self.job, environment=self.env, produce=("carts",), log_path=log_path
                 )
                 self.assertFalse(result.passed)
                 self.assertIn("collides", result.failure)
@@ -309,7 +309,7 @@ class ExecutionTests(unittest.TestCase):
         stderr = io.StringIO()
         process = FakeProcess(stdout, stderr)
         with patch("punch.execution.subprocess.Popen", return_value=process):
-            result = execute_workflow(self.workflow, environment=self.env, produce=("carts",))
+            result = execute_job(self.job, environment=self.env, produce=("carts",))
         self.assertFalse(result.passed)
         self.assertIn("could not read stdout", result.failure)
         self.assertEqual(result.child_exit_code, 0)
@@ -325,7 +325,7 @@ class ExecutionTests(unittest.TestCase):
         self.carts_path.write_text(body, encoding="utf-8")
 
     def run_consumer(self, overrides=None):
-        return execute_workflow(
+        return execute_job(
             self.consumer,
             environment=self.env,
             data_overrides=overrides or {},
@@ -345,7 +345,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse(self.args_path.exists())
 
     def test_missing_required_file_is_reported_even_when_docker_is_declined(self) -> None:
-        result = execute_workflow(
+        result = execute_job(
             self.consumer, environment=self.env, docker_run_confirmed=False,
             producers_of=lambda dataset: ("data-producer",),
         )
@@ -396,7 +396,7 @@ class ExecutionTests(unittest.TestCase):
 
     def run_optional(self, overrides=None):
         out = io.StringIO()
-        result = execute_workflow(
+        result = execute_job(
             self.optional_consumer,
             environment=self.env,
             data_overrides=overrides or {},
@@ -458,7 +458,7 @@ class ExecutionTests(unittest.TestCase):
 
     def run_optional_with(self, choices: dict[str, bool] | None) -> tuple[ExecutionResult, str]:
         out = io.StringIO()
-        result = execute_workflow(
+        result = execute_job(
             self.optional_consumer,
             environment=self.env,
             optional_choices=choices,
@@ -542,7 +542,7 @@ class ExecutionTests(unittest.TestCase):
             data_sources(self.optional_consumer, {}, {"carts": False}), {"carts": "default"}
         )
         self.assertEqual(data_sources(self.consumer, {}), {"carts": "data/carts.csv"})
-        self.assertEqual(data_sources(self.no_csv_workflow, {}), {})
+        self.assertEqual(data_sources(self.no_csv_job, {}), {})
 
     def test_delete_prompt_is_skipped_without_a_tty(self) -> None:
         from punch.execution import confirm_delete_consumed
@@ -580,14 +580,14 @@ class ExecutionTests(unittest.TestCase):
             "        targets: [data-consumer]\n"
         )
         (self.root / "two-producer.yaml").write_text(text, encoding="utf-8")
-        return load_workflow(self.root / "two-producer.yaml")
+        return load_job(self.root / "two-producer.yaml")
 
     def test_opted_in_dataset_fails_when_only_another_declared_dataset_has_records(self) -> None:
-        workflow = self.two_dataset_producer()
+        job = self.two_dataset_producer()
         self.write_previous_carts()
         env = {**self.env, "FAKE_STDOUT": "[DATA orders] ord_1"}
-        result = execute_workflow(
-            workflow, environment=env, produce=("carts",),
+        result = execute_job(
+            job, environment=env, produce=("carts",),
             stdout=io.StringIO(), stderr=io.StringIO(),
         )
         self.assertFalse(result.passed)
@@ -596,10 +596,10 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse((self.root / "data" / "orders.csv").exists())
 
     def test_two_opted_in_datasets_publish_nothing_when_one_is_empty(self) -> None:
-        workflow = self.two_dataset_producer()
+        job = self.two_dataset_producer()
         env = {**self.env, "FAKE_STDOUT": "[DATA orders] ord_1"}
-        result = execute_workflow(
-            workflow, environment=env, produce=("all",),
+        result = execute_job(
+            job, environment=env, produce=("all",),
             stdout=io.StringIO(), stderr=io.StringIO(),
         )
         self.assertFalse(result.passed)
@@ -607,10 +607,10 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse((self.root / "data" / "orders.csv").exists())
 
     def test_two_opted_in_datasets_publish_together(self) -> None:
-        workflow = self.two_dataset_producer()
+        job = self.two_dataset_producer()
         env = {**self.env, "FAKE_STDOUT": "[DATA carts] c,p,s|[DATA orders] ord_1"}
-        result = execute_workflow(
-            workflow, environment=env, produce=("all",),
+        result = execute_job(
+            job, environment=env, produce=("all",),
             stdout=io.StringIO(), stderr=io.StringIO(),
         )
         self.assertTrue(result.passed, result.failure)
@@ -653,8 +653,8 @@ while True:
 
         worker = threading.Thread(
             target=lambda: result.append(
-                execute_workflow(
-                    self.workflow,
+                execute_job(
+                    self.job,
                     environment={
                         **self.env,
                         "CHILD_PID_PATH": str(child_pid_path),
@@ -738,8 +738,8 @@ time.sleep(30)
         output = InterruptingOutput()
 
         with self.assertRaises(KeyboardInterrupt):
-            execute_workflow(
-                self.no_csv_workflow,
+            execute_job(
+                self.no_csv_job,
                 environment={
                     **self.env,
                     "CHILD_PID_PATH": str(child_pid_path),
@@ -798,8 +798,8 @@ time.sleep(30)
 
         with patch("punch.execution.INTERRUPT_GRACE_TIMEOUT_SECONDS", 0.05):
             with self.assertRaises(KeyboardInterrupt):
-                execute_workflow(
-                    self.no_csv_workflow,
+                execute_job(
+                    self.no_csv_job,
                     environment={
                         **self.env,
                         "CHILD_PID_PATH": str(child_pid_path),
@@ -836,8 +836,8 @@ time.sleep(30)
     def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
         self.env.pop("BASE_URL")
         self.env["SECRET"] = "ignored"
-        result = execute_workflow(
-            self.no_csv_workflow, environment=self.env
+        result = execute_job(
+            self.no_csv_job, environment=self.env
         )
         arguments = self.args_path.read_text(encoding="utf-8").splitlines()
         forwarded = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-e"]
@@ -871,16 +871,16 @@ time.sleep(30)
         self.assertNotIn("BASE_URL=http://target", arguments)
         self.assertNotIn("SECRET=ignored", arguments)
 
-    def test_workflow_without_data_never_harvests(self) -> None:
-        result = execute_workflow(self.no_csv_workflow, environment=self.env)
+    def test_job_without_data_never_harvests(self) -> None:
+        result = execute_job(self.no_csv_job, environment=self.env)
         self.assertTrue(result.passed)
         self.assertEqual(result.datasets, ())
 
     def test_closes_child_streams_after_streaming(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ResourceWarning)
-            result = execute_workflow(
-                self.no_csv_workflow, environment=self.env
+            result = execute_job(
+                self.no_csv_job, environment=self.env
             )
         self.assertTrue(result.passed)
         self.assertEqual(
@@ -891,8 +891,8 @@ time.sleep(30)
         self.env.update(FAKE_STDOUT="stdout-line", FAKE_STDERR="stderr-line")
         stdout = io.StringIO()
         stderr = io.StringIO()
-        result = execute_workflow(
-            self.no_csv_workflow,
+        result = execute_job(
+            self.no_csv_job,
             environment=self.env,
             stdout=stdout,
             stderr=stderr,
@@ -908,7 +908,7 @@ time.sleep(30)
     def test_spawn_error_returns_failure_without_publishing(self) -> None:
         self.write_previous_carts()
         self.env["PATH"] = str(self.root / "missing-bin")
-        result = execute_workflow(self.workflow, environment=self.env, produce=("carts",))
+        result = execute_job(self.job, environment=self.env, produce=("carts",))
         self.assertFalse(result.passed)
         self.assertIsNone(result.child_exit_code)
         self.assertIn("could not start Docker Compose", result.failure)

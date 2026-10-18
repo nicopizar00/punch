@@ -1,7 +1,7 @@
 # Punch's step for Argo Workflows: one k6 run of a consumer's scenario image,
 # with Punch's dataset preflight and [DATA] harvest (k6-run.sh, mounted from
 # the punch-k6-run-script ConfigMap). Consumers call it from thin
-# per-workflow WorkflowTemplates via templateRef; contract: README.md.
+# per-job WorkflowTemplates via templateRef; contract: README.md.
 # k6 and k6-browser differ only in the image placeholder and the /dev/shm
 # volume Chromium needs.
 apiVersion: argoproj.io/v1alpha1
@@ -29,7 +29,7 @@ spec:
         archiveLogs: true
       inputs:
         parameters:
-          - name: workflow
+          - name: job
           - name: script
           - name: config
             default: ""
@@ -83,8 +83,8 @@ spec:
         imagePullPolicy: Always
         command: [sh, /punch/bin/k6-run.sh]
         env:
-          - name: PUNCH_WORKFLOW
-            value: "{{inputs.parameters.workflow}}"
+          - name: PUNCH_JOB
+            value: "{{inputs.parameters.job}}"
           - name: PUNCH_SCRIPT
             value: "{{inputs.parameters.script}}"
           - name: PUNCH_CONFIG
@@ -142,7 +142,7 @@ spec:
         archiveLogs: true
       inputs:
         parameters:
-          - name: workflow
+          - name: job
           - name: script
           - name: config
             default: ""
@@ -196,8 +196,8 @@ spec:
         imagePullPolicy: Always
         command: [sh, /punch/bin/k6-run.sh]
         env:
-          - name: PUNCH_WORKFLOW
-            value: "{{inputs.parameters.workflow}}"
+          - name: PUNCH_JOB
+            value: "{{inputs.parameters.job}}"
           - name: PUNCH_SCRIPT
             value: "{{inputs.parameters.script}}"
           - name: PUNCH_CONFIG

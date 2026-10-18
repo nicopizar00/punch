@@ -1,5 +1,5 @@
 apiVersion: punch/v1
-kind: K6Workflow
+kind: K6Job
 metadata:
   name: gate
   description: Catalog product lookup threshold gate.

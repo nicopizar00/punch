@@ -67,7 +67,7 @@ jobs:
           | Smoke | smoke-report.html · smoke.json |
           | Catalog gate | catalog-gate-report.html · catalog-gate.json |
           | Order journey | order-journey-report.html · order-journey.json · state/test-context.json |
-          | Run evidence | state/punch-run.json — per-workflow exit codes, pass/fail, failure, datasets |
+          | Run evidence | state/punch-run.json — per-job exit codes, pass/fail, failure, datasets |
           | k6 output | logs/k6-smoke.log · k6-gate.log · k6-journey.log |
           | Docker logs | logs/gateway-api.log · catalog-api.log · orders-api.log · postgres.log |
 
@@ -132,7 +132,7 @@ jobs:
           | catalog-gate-report.html | HTML report — catalog read performance gate |
           | order-journey-report.html | HTML report — order create-read journey |
           | smoke.json / catalog-gate.json / order-journey.json | Compact k6 summaries — counts, thresholds, durations |
-          | state/punch-run.json | Canonical run evidence — workflow, exit codes, `passed`, `failure`, `datasets` |
+          | state/punch-run.json | Canonical run evidence — job, exit codes, `passed`, `failure`, `datasets` |
           | state/test-context.json | Journey metadata written by `order-journey.ts` |
           | logs/*.log | Docker service logs for debugging |
           EOF

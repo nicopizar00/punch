@@ -15,7 +15,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import IO, Callable, Mapping, Sequence
 
-from punch.workflow import DataProduct, K6Workflow, data_env_name
+from punch.job import DataProduct, K6Job, data_env_name
 
 
 DATA_TAG_PATTERN = re.compile(r"^\[DATA ([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\] ?(.*)$")
@@ -33,7 +33,7 @@ class DatasetResult:
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    workflow_name: str
+    job_name: str
     command: tuple[str, ...]
     child_exit_code: int | None
     passed: bool
@@ -49,7 +49,7 @@ DATASET_MODE = 0o644
 
 
 def build_compose_run_command(
-    workflow: K6Workflow,
+    job: K6Job,
     environment: Mapping[str, str],
     *,
     container_name: str | None = None,
@@ -61,21 +61,21 @@ def build_compose_run_command(
         "docker",
         "compose",
         "-f",
-        str(workflow.compose_file),
+        str(job.compose_file),
         "run",
         "--rm",
     ]
     if container_name is not None:
         command.extend(["--name", container_name])
-    config = config if config is not None else workflow.k6_config
+    config = config if config is not None else job.k6_config
     if config is not None:
         command.extend(["-v", f"{Path(config).resolve()}:{K6_CONFIG_MOUNT}:ro"])
-    for name in workflow.forward_environment:
+    for name in job.forward_environment:
         if name in environment:
             command.extend(["-e", f"{name}={environment[name]}"])
     for name, value in (data_env or {}).items():
         command.extend(["-e", f"{name}={value}"])
-    command.extend([workflow.compose_service, "run", workflow.k6_script])
+    command.extend([job.compose_service, "run", job.k6_script])
     if config is not None:
         command.extend(["--config", K6_CONFIG_MOUNT])
     return command
@@ -98,18 +98,18 @@ def confirm_docker_run(
     return stdin.readline().strip().lower() in {"y", "yes"}
 
 
-def validate_produce(workflow: K6Workflow, produce: Sequence[str]) -> tuple[str, ...]:
+def validate_produce(job: K6Job, produce: Sequence[str]) -> tuple[str, ...]:
     """Resolve the datasets a run opted into; "all" means every declared one."""
-    declared = tuple(p.dataset for p in workflow.data.produces) if workflow.data else ()
+    declared = tuple(p.dataset for p in job.data.produces) if job.data else ()
     if "all" in produce:
         return declared
     for dataset in produce:
         if dataset not in declared:
-            raise ValueError(f'workflow {workflow.name} does not produce "{dataset}"')
+            raise ValueError(f'job {job.name} does not produce "{dataset}"')
     return tuple(dict.fromkeys(produce))
 
 
-def resolve_data_overrides(workflow: K6Workflow, raw: Sequence[str]) -> dict[str, Path]:
+def resolve_data_overrides(job: K6Job, raw: Sequence[str]) -> dict[str, Path]:
     """Parse `<dataset>=<path>` overrides. Paths resolve against the working
     directory and must stay beneath spec.data.directory — the only host
     directory the container can see."""
@@ -118,12 +118,12 @@ def resolve_data_overrides(workflow: K6Workflow, raw: Sequence[str]) -> dict[str
         dataset, separator, path_text = item.partition("=")
         if not separator or not dataset or not path_text:
             raise ValueError(f"invalid --data {item!r}: expected <dataset>=<path>")
-        if workflow.data is None or (
-            dataset not in workflow.data.requires and dataset not in workflow.data.optional
+        if job.data is None or (
+            dataset not in job.data.requires and dataset not in job.data.optional
         ):
-            raise ValueError(f'workflow {workflow.name} does not require "{dataset}"')
-        path = (workflow.working_directory / path_text).resolve()
-        directory = workflow.data.directory
+            raise ValueError(f'job {job.name} does not require "{dataset}"')
+        path = (job.working_directory / path_text).resolve()
+        directory = job.data.directory
         if directory not in path.parents:
             raise ValueError(
                 f"--data {dataset} path must be beneath spec.data.directory ({directory})"
@@ -133,24 +133,24 @@ def resolve_data_overrides(workflow: K6Workflow, raw: Sequence[str]) -> dict[str
 
 
 def required_data_paths(
-    workflow: K6Workflow, overrides: Mapping[str, Path]
+    job: K6Job, overrides: Mapping[str, Path]
 ) -> dict[str, Path]:
-    if workflow.data is None:
+    if job.data is None:
         return {}
     return {
-        dataset: overrides.get(dataset, workflow.data.host_path(dataset))
-        for dataset in workflow.data.requires
+        dataset: overrides.get(dataset, job.data.host_path(dataset))
+        for dataset in job.data.requires
     }
 
 
 def optional_data_paths(
-    workflow: K6Workflow, overrides: Mapping[str, Path]
+    job: K6Job, overrides: Mapping[str, Path]
 ) -> dict[str, Path]:
-    if workflow.data is None:
+    if job.data is None:
         return {}
     return {
-        dataset: overrides.get(dataset, workflow.data.host_path(dataset))
-        for dataset in workflow.data.optional
+        dataset: overrides.get(dataset, job.data.host_path(dataset))
+        for dataset in job.data.optional
     }
 
 
@@ -168,69 +168,69 @@ def _has_data_rows(path: Path) -> bool:
 
 
 def used_data_paths(
-    workflow: K6Workflow,
+    job: K6Job,
     overrides: Mapping[str, Path],
     optional_choices: Mapping[str, bool] | None = None,
 ) -> dict[str, Path]:
     """Required datasets plus optional ones whose choice selects the file
     (no choice: the file has data rows)."""
-    used = required_data_paths(workflow, overrides)
+    used = required_data_paths(job, overrides)
     choices = optional_choices or {}
-    for dataset, path in optional_data_paths(workflow, overrides).items():
+    for dataset, path in optional_data_paths(job, overrides).items():
         if choices.get(dataset, _has_data_rows(path)):
             used[dataset] = path
     return used
 
 
 def absent_optional_datasets(
-    workflow: K6Workflow,
+    job: K6Job,
     overrides: Mapping[str, Path],
     optional_choices: Mapping[str, bool] | None = None,
 ) -> tuple[str, ...]:
-    used = used_data_paths(workflow, overrides, optional_choices)
-    return tuple(d for d in optional_data_paths(workflow, overrides) if d not in used)
+    used = used_data_paths(job, overrides, optional_choices)
+    return tuple(d for d in optional_data_paths(job, overrides) if d not in used)
 
 
 def missing_datasets(
-    workflow: K6Workflow,
+    job: K6Job,
     overrides: Mapping[str, Path],
     optional_choices: Mapping[str, bool] | None = None,
 ) -> tuple[str, ...]:
     """Datasets this run reads whose file is absent or has no data rows."""
     return tuple(
         dataset
-        for dataset, path in used_data_paths(workflow, overrides, optional_choices).items()
+        for dataset, path in used_data_paths(job, overrides, optional_choices).items()
         if not _has_data_rows(path)
     )
 
 
 def preflight_requirements(
-    workflow: K6Workflow,
+    job: K6Job,
     overrides: Mapping[str, Path],
     producers_of: Callable[[str], Sequence[str]],
     optional_choices: Mapping[str, bool] | None = None,
 ) -> str | None:
-    for dataset in missing_datasets(workflow, overrides, optional_choices):
-        producers = ", ".join(producers_of(dataset)) or "no known workflow"
+    for dataset in missing_datasets(job, overrides, optional_choices):
+        producers = ", ".join(producers_of(dataset)) or "no known job"
         return (
-            f'{workflow.name} requires "{dataset}"; '
+            f'{job.name} requires "{dataset}"; '
             f"produce it with: {producers} (--produce {dataset})"
         )
     return None
 
 
 def data_environment(
-    workflow: K6Workflow,
+    job: K6Job,
     overrides: Mapping[str, Path],
     optional_choices: Mapping[str, bool] | None = None,
 ) -> dict[str, str]:
     """Container paths of every used dataset, keyed DATA_<NAME>_CSV."""
-    if workflow.data is None:
+    if job.data is None:
         return {}
-    mounted_at = workflow.data.mounted_at.rstrip("/")
+    mounted_at = job.data.mounted_at.rstrip("/")
     return {
-        data_env_name(dataset): f"{mounted_at}/{path.relative_to(workflow.data.directory).as_posix()}"
-        for dataset, path in used_data_paths(workflow, overrides, optional_choices).items()
+        data_env_name(dataset): f"{mounted_at}/{path.relative_to(job.data.directory).as_posix()}"
+        for dataset, path in used_data_paths(job, overrides, optional_choices).items()
     }
 
 
@@ -238,7 +238,7 @@ DEFAULT_DATA = "default"
 
 
 def resolve_data_args(
-    workflow: K6Workflow, raw: Sequence[str]
+    job: K6Job, raw: Sequence[str]
 ) -> tuple[dict[str, Path], dict[str, bool]]:
     """Split `--data` into path overrides and `<dataset>=default` choices."""
     paths: list[str] = []
@@ -247,10 +247,10 @@ def resolve_data_args(
     for item in raw:
         dataset, separator, value = item.partition("=")
         if separator and value == DEFAULT_DATA:
-            if workflow.data is None or dataset not in workflow.data.optional:
+            if job.data is None or dataset not in job.data.optional:
                 raise ValueError(
                     f'--data {dataset}={DEFAULT_DATA}: "{dataset}" is not an optional '
-                    f"dataset of {workflow.name}"
+                    f"dataset of {job.name}"
                 )
             choices[dataset] = False
         else:
@@ -259,26 +259,26 @@ def resolve_data_args(
     for dataset in choices:
         if dataset in pathed:
             raise ValueError(f'--data {dataset}: both "default" and a path given')
-    return resolve_data_overrides(workflow, paths), choices
+    return resolve_data_overrides(job, paths), choices
 
 
 def data_sources(
-    workflow: K6Workflow,
+    job: K6Job,
     overrides: Mapping[str, Path],
     optional_choices: Mapping[str, bool] | None = None,
 ) -> dict[str, str]:
     """Evidence: each declared input's path relative to the working directory,
     or "default" when the scenario's built-in data is used."""
-    if workflow.data is None:
+    if job.data is None:
         return {}
-    used = used_data_paths(workflow, overrides, optional_choices)
+    used = used_data_paths(job, overrides, optional_choices)
     return {
         dataset: (
-            used[dataset].relative_to(workflow.working_directory).as_posix()
+            used[dataset].relative_to(job.working_directory).as_posix()
             if dataset in used
             else DEFAULT_DATA
         )
-        for dataset in (*workflow.data.requires, *workflow.data.optional)
+        for dataset in (*job.data.requires, *job.data.optional)
     }
 
 
@@ -365,7 +365,7 @@ class _DatasetSink:
 
 
 def _result(
-    workflow: K6Workflow,
+    job: K6Job,
     command: list[str],
     *,
     child_exit_code: int | None,
@@ -374,7 +374,7 @@ def _result(
     datasets: tuple[DatasetResult, ...] = (),
 ) -> ExecutionResult:
     return ExecutionResult(
-        workflow_name=workflow.name,
+        job_name=job.name,
         command=tuple(command),
         child_exit_code=child_exit_code,
         passed=passed,
@@ -477,8 +477,8 @@ def _close_stream(stream: IO[str]) -> None:
         pass
 
 
-def execute_workflow(
-    workflow: K6Workflow,
+def execute_job(
+    job: K6Job,
     *,
     environment: Mapping[str, str],
     produce: Sequence[str] = (),
@@ -492,34 +492,34 @@ def execute_workflow(
     config: Path | None = None,
 ) -> ExecutionResult:
     overrides = dict(data_overrides or {})
-    data_env = data_environment(workflow, overrides, optional_choices)
-    command = build_compose_run_command(workflow, environment, data_env=data_env, config=config)
+    data_env = data_environment(job, overrides, optional_choices)
+    command = build_compose_run_command(job, environment, data_env=data_env, config=config)
 
     def fail_before_start(failure: str) -> ExecutionResult:
-        return _result(workflow, command, child_exit_code=None, passed=False, failure=failure)
+        return _result(job, command, child_exit_code=None, passed=False, failure=failure)
 
     try:
-        opted = validate_produce(workflow, produce)
+        opted = validate_produce(job, produce)
     except ValueError as error:
         return fail_before_start(str(error))
     preflight_failure = preflight_requirements(
-        workflow, overrides, producers_of, optional_choices
+        job, overrides, producers_of, optional_choices
     )
     if preflight_failure is not None:
         return fail_before_start(preflight_failure)
     if not docker_run_confirmed:
         return fail_before_start("Docker Compose run was not confirmed")
-    missing = [name for name in workflow.required_environment if not environment.get(name)]
+    missing = [name for name in job.required_environment if not environment.get(name)]
     if missing:
         return fail_before_start(f"missing required environment: {', '.join(missing)}")
-    if log_path is not None and workflow.data is not None:
+    if log_path is not None and job.data is not None:
         for dataset in opted:
-            if paths_collide(workflow.data.host_path(dataset), log_path):
+            if paths_collide(job.data.host_path(dataset), log_path):
                 return fail_before_start(f'data output "{dataset}" collides with log path')
 
     output = stdout if stdout is not None else sys.stdout
     errors = stderr if stderr is not None else sys.stderr
-    for dataset in absent_optional_datasets(workflow, overrides, optional_choices):
+    for dataset in absent_optional_datasets(job, overrides, optional_choices):
         output.write(
             f'[punch] optional dataset "{dataset}" not used — scenario uses its default\n'
         )
@@ -531,7 +531,7 @@ def execute_workflow(
         *, child_exit_code: int | None, passed: bool, failure: str | None
     ) -> ExecutionResult:
         return _result(
-            workflow,
+            job,
             command,
             child_exit_code=child_exit_code,
             passed=passed,
@@ -540,18 +540,18 @@ def execute_workflow(
         )
 
     try:
-        if workflow.data is not None:
+        if job.data is not None:
             for dataset in opted:
-                product = workflow.data.product(dataset)
+                product = job.data.product(dataset)
                 assert product is not None
-                sinks[dataset] = _DatasetSink(product, workflow.data.host_path(dataset))
+                sinks[dataset] = _DatasetSink(product, job.data.host_path(dataset))
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_file = log_path.open("w", encoding="utf-8")
 
         container_name = f"punch-{os.getpid()}-{uuid.uuid4().hex[:12]}"
         command = build_compose_run_command(
-            workflow,
+            job,
             environment,
             container_name=container_name,
             data_env=data_env,
@@ -560,7 +560,7 @@ def execute_workflow(
         try:
             proc = subprocess.Popen(
                 command,
-                cwd=workflow.working_directory,
+                cwd=job.working_directory,
                 env=dict(environment),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -620,7 +620,7 @@ def execute_workflow(
                     record = _data_record(line)
                     if record is not None:
                         dataset, payload = record
-                        product = workflow.data.product(dataset) if workflow.data else None
+                        product = job.data.product(dataset) if job.data else None
                         if product is None:
                             data_error = f'undeclared dataset "{dataset}"'
                         elif dataset in sinks:

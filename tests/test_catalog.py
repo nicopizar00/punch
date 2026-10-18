@@ -48,7 +48,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_unknown_target_fails(self) -> None:
         self.edit("data-output.yaml", "targets: [data-consumer]", "targets: [ghost]")
-        with self.assertRaisesRegex(CatalogError, 'data-producer targets unknown workflow "ghost"'):
+        with self.assertRaisesRegex(CatalogError, 'data-producer targets unknown job "ghost"'):
             load_catalog(self.root)
 
     def test_target_that_does_not_require_dataset_fails(self) -> None:
@@ -59,7 +59,7 @@ class CatalogTests(unittest.TestCase):
     def test_required_dataset_without_producer_fails(self) -> None:
         self.edit("data-input.yaml", "requires: [carts]", "requires: [carts, orders]")
         with self.assertRaisesRegex(
-            CatalogError, 'data-consumer requires "orders" but no workflow produces it'
+            CatalogError, 'data-consumer requires "orders" but no job produces it'
         ):
             load_catalog(self.root)
 
@@ -81,12 +81,12 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(CatalogError, 'producers of "carts" declare different columns'):
             load_catalog(self.root)
 
-    def test_duplicate_workflow_names_fail(self) -> None:
+    def test_duplicate_job_names_fail(self) -> None:
         shutil.copy(self.root / "data-input.yaml", self.root / "copy.yaml")
-        with self.assertRaisesRegex(CatalogError, 'duplicate workflow name "data-consumer"'):
+        with self.assertRaisesRegex(CatalogError, 'duplicate job name "data-consumer"'):
             load_catalog(self.root)
 
-    def test_invalid_workflow_file_is_reported_with_its_name(self) -> None:
+    def test_invalid_job_file_is_reported_with_its_name(self) -> None:
         (self.root / "broken.yaml").write_text("apiVersion: nope\n", encoding="utf-8")
         with self.assertRaisesRegex(CatalogError, "broken.yaml"):
             load_catalog(self.root)

@@ -1,6 +1,7 @@
 # k6-ts-docker
 
-Punch turns one declarative workflow YAML into one Docker Compose run of k6.
+Punch turns one declarative Punch job (a YAML file) into one Docker Compose
+run of k6.
 This repo also holds TypeScript k6 tests and a small reference app
 (gateway, catalog, orders, Postgres) so the pipeline runs end to end, locally
 and in GitHub Actions. Usage and flags: [README](README.md).
@@ -11,10 +12,10 @@ the pipeline internals.
 ## Execution chain
 
     TypeScript source  →  esbuild (k6.Dockerfile builder stage)  →  k6 image  →
-    k6 run (one docker compose run per workflow)  →  reports/
+    k6 run (one docker compose run per job)  →  reports/
 
 The Kubernetes runtime ([`k8s/README.md`](k8s/README.md)) keeps the chain up
-to the k6 image, then runs one Argo Workflows step per workflow with S3
+to the k6 image, then runs one Argo Workflows step per job with S3
 artifacts instead of `docker compose run`.
 
 Every change preserves this chain. If a change does not fit it, stop and
@@ -26,12 +27,12 @@ discuss.
 |---|---|
 | `bin/punch` | Shell shim → `python3 -m punch` |
 | `bin/*` | Legacy wrappers over `punch run` / `docker compose` |
-| `src/punch/` | Engine: `__main__` (CLI, evidence), `workflow` (strict loader), `catalog` (dataset links), `data_plan` (pickers, pure), `sizing` (pure), `execution` (compose run, streams, datasets), `menu` (terminal UI) |
+| `src/punch/` | Engine: `__main__` (CLI, evidence), `job` (strict loader), `catalog` (dataset links), `data_plan` (pickers, pure), `sizing` (pure), `execution` (compose run, streams, datasets), `menu` (terminal UI) |
 | `k8s/` | Kubernetes runtime (ADR 0006): `punch-k6-run` WorkflowTemplate, `k6-run.sh` step, executor RBAC — no Python |
 | `src/tests/` | k6 TypeScript; `support/report.ts` builds HTML + JSON summaries |
 | `src/lib/`, `src/utils/`, `src/types/` | k6 helpers behind the `@lib` / `@utils` / `@app-types` aliases |
 | `src/services/` | Reference app (Node; dependencies install inside Docker) |
-| `workflows/k6/` | Bundled workflow YAML (fixtures; consumers own their own) |
+| `jobs/k6/` | Bundled job YAML (fixtures; consumers own their own) |
 | `tests/` | Python `unittest` suite for the engine and CI contract |
 | `docker/`, `docker-compose.yml` | Images and the single compose file |
 | `scripts/k6-wrapper.sh` | Container entrypoint helper |
@@ -50,10 +51,10 @@ discuss.
 2. **Thin façade.** Punch shells out to `docker compose run --rm`; it adds no
    execution semantics, never builds images, never installs dependencies.
    Outside YAML loading and the menu, the engine is standard library only.
-3. **Evidence.** A runtime change is done when `./bin/punch run <workflow>`
+3. **Evidence.** A runtime change is done when `./bin/punch run <job>`
    writes `reports/state/punch-run.json` with `"passed": true`. Doc-only
    changes need diff review only. See
-   [validation.md](docs/workflows/validation.md).
+   [validation.md](docs/jobs/validation.md).
 4. **Layer ownership.** One owning layer per change; a crossing must say why.
    See [punch-boundaries.md](docs/architecture/punch-boundaries.md).
 5. **Small, reviewable steps.** Follow the agreed plan; flag anything beyond
@@ -71,7 +72,7 @@ docker compose build
 ./bin/punch doctor
 ./bin/punch run smoke                     # or gate | journey | all | path.yaml
 ./bin/punch run all --collect-logs
-./bin/punch menu [workflows-dir]
+./bin/punch menu [jobs-dir]
 ./bin/punch clean
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
 ```

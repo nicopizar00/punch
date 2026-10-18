@@ -1,12 +1,12 @@
 ---
-applyTo: "src/tests/support/**,src/punch/**,reports/**,docs/workflows/validation.md"
+applyTo: "src/tests/support/**,src/punch/**,reports/**,docs/jobs/validation.md"
 description: Contract for artifacts, logs, summaries, and reports produced by Punch.
 ---
 # Artifacts & Reporting — Path Instructions
 
 Scope: everything that writes under `reports/` (`src/tests/support/`, the
 evidence and logging code in `src/punch/`) and
-[`docs/workflows/validation.md`](../../docs/workflows/validation.md), which
+[`docs/jobs/validation.md`](../../docs/jobs/validation.md), which
 holds the artifact list and the `punch-run.json` schema. Don't restate them
 here.
 

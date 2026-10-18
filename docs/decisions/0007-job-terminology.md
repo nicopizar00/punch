@@ -2,10 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-18
-- Implementation: not built. The code, files, and YAML still use the old
-  names; the
-  [reference architecture, section 10](../architecture/reference-architecture-and-implementation-guide.md#10-migrating-from-punch-workflows-to-punch-jobs)
-  maps each name and tracks what is built.
+- Implementation: built. The [reference architecture, section 10](../architecture/reference-architecture-and-implementation-guide.md#10-migrating-from-punch-workflows-to-punch-jobs) maps each old name to the new one.
 
 ## Context
 

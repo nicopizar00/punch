@@ -90,7 +90,7 @@ class PlanDataTests(unittest.TestCase):
     def plan(self, name, chooser, overrides=None, choices=None, environment=ENV):
         catalog = load_catalog(self.root)
         return plan_data(
-            catalog.workflows[name], catalog, overrides or {}, choices or {},
+            catalog.jobs[name], catalog, overrides or {}, choices or {},
             choose=chooser, environment=environment,
         )
 
@@ -102,7 +102,7 @@ class PlanDataTests(unittest.TestCase):
         plan = self.plan("data-consumer", chooser)
         self.assertEqual(chooser.choices, [])
         self.assertIsInstance(plan, DataPlan)
-        self.assertEqual(plan.workflow.name, "data-consumer")
+        self.assertEqual(plan.job.name, "data-consumer")
         self.assertEqual((plan.produce, plan.switched_from), ((), ()))
 
     def test_producer_picker_lists_all_with_recommended_preselected(self) -> None:
@@ -117,7 +117,7 @@ class PlanDataTests(unittest.TestCase):
         )
         self.assertEqual(choice.options, ("data-producer", "other-producer  (recommended)"))
         self.assertEqual(choice.cursor, 1)
-        self.assertEqual(plan.workflow.name, "data-producer")
+        self.assertEqual(plan.job.name, "data-producer")
         self.assertEqual(plan.produce, ("carts",))
         self.assertEqual(plan.switched_from, ("data-consumer",))
         self.assertEqual(dict(plan.overrides), {})
@@ -154,15 +154,15 @@ class PlanDataTests(unittest.TestCase):
         plan = self.plan("data-status", chooser)
         self.assertEqual(len(chooser.choices), 2)
         self.assertTrue(chooser.choices[1].title.startswith('"data-consumer" needs "carts"'))
-        self.assertEqual(plan.workflow.name, "data-producer")
+        self.assertEqual(plan.job.name, "data-producer")
         self.assertEqual(plan.produce, ("carts",))
         self.assertEqual(plan.switched_from, ("data-status", "data-consumer"))
 
-    def test_chain_stops_at_first_workflow_with_data(self) -> None:
+    def test_chain_stops_at_first_job_with_data(self) -> None:
         self.add_second_hop()
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         plan = self.plan("data-status", ScriptedChooser("data-consumer"))
-        self.assertEqual(plan.workflow.name, "data-consumer")
+        self.assertEqual(plan.job.name, "data-consumer")
         self.assertEqual(plan.produce, ("orders",))
 
     def test_cycle_stops(self) -> None:
@@ -177,7 +177,7 @@ class PlanDataTests(unittest.TestCase):
             PlanStop("producer cycle: data-status → data-consumer → data-producer → data-consumer"),
         )
 
-    def test_producer_step_ignores_selected_workflow_overrides(self) -> None:
+    def test_producer_step_ignores_selected_job_overrides(self) -> None:
         # data-status reads carts too, overridden to a file with rows. If that
         # override leaked into data-consumer's step, carts would look present
         # there and the second picker would never open.
@@ -190,7 +190,7 @@ class PlanDataTests(unittest.TestCase):
         plan = self.plan("data-status", chooser, overrides={"carts": alternate})
         self.assertEqual(len(chooser.choices), 2)
         self.assertIn("no rows at data/carts.csv", chooser.choices[1].title)
-        self.assertEqual(plan.workflow.name, "data-producer")
+        self.assertEqual(plan.job.name, "data-producer")
         self.assertEqual(dict(plan.overrides), {})
 
     def test_picked_producer_gets_its_own_source_picker(self) -> None:
@@ -203,7 +203,7 @@ class PlanDataTests(unittest.TestCase):
             chooser.choices[1].title,
             '"data-consumer" can read "carts" — pick a source (Esc cancels)',
         )
-        self.assertEqual(plan.workflow.name, "data-consumer")
+        self.assertEqual(plan.job.name, "data-consumer")
         self.assertEqual(plan.produce, ("orders",))
         self.assertEqual(dict(plan.optional_choices), {"carts": True})
 
@@ -243,7 +243,7 @@ class PlanDataTests(unittest.TestCase):
         chooser = ScriptedChooser("data/carts.csv (no rows)", "data-producer")
         plan = self.plan("data-consumer", chooser)
         self.assertEqual(chooser.choices[0].options[1], "data/carts.csv (no rows)")
-        self.assertEqual(plan.workflow.name, "data-producer")
+        self.assertEqual(plan.job.name, "data-producer")
         self.assertEqual(plan.produce, ("carts",))
 
     def test_optional_without_rows_or_producer_defaults_silently(self) -> None:
@@ -279,14 +279,14 @@ class PlanDataTests(unittest.TestCase):
     def test_switch_hint_names_origin_and_what_it_still_misses(self) -> None:
         self.add_second_hop()
         catalog = load_catalog(self.root)
-        plan = DataPlan(catalog.workflows["data-producer"], produce=("carts",),
+        plan = DataPlan(catalog.jobs["data-producer"], produce=("carts",),
                         switched_from=("data-status", "data-consumer"))
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         self.assertEqual(
             switch_hint(plan, catalog),
             "[punch] carts ready; run data-status next (still missing: orders).",
         )
-        plan = DataPlan(catalog.workflows["data-producer"], produce=("carts",),
+        plan = DataPlan(catalog.jobs["data-producer"], produce=("carts",),
                         switched_from=("data-consumer",))
         self.assertEqual(switch_hint(plan, catalog), "[punch] carts ready; run data-consumer next.")
 

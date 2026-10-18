@@ -1,6 +1,6 @@
 """punch CLI entry point.
 
-Python orchestration with pinned PyYAML for workflow loading. Owns control
+Python orchestration with pinned PyYAML for job loading. Owns control
 flow; delegates execution to Docker Compose. Writes a single evidence file at
 reports/state/punch-run.json so automation can confirm a run happened without
 parsing k6 output. Install the pinned requirements before invoking Punch.
@@ -28,12 +28,12 @@ STATE_DIR = REPORTS_DIR / "state"
 LOGS_DIR = REPORTS_DIR / "logs"
 SERVICE_LOG_NAMES = ("gateway-api", "catalog-api", "orders-api", "postgres")
 
-BUNDLED_WORKFLOW_DIR = REPO_ROOT / "workflows" / "k6"
-BUNDLED_WORKFLOWS = {
-    "smoke": BUNDLED_WORKFLOW_DIR / "smoke.yaml",
-    "gate": BUNDLED_WORKFLOW_DIR / "gate.yaml",
-    "journey": BUNDLED_WORKFLOW_DIR / "journey.yaml",
-    "bff-checkout-journey": BUNDLED_WORKFLOW_DIR / "bff-checkout-journey.yaml",
+BUNDLED_JOB_DIR = REPO_ROOT / "jobs" / "k6"
+BUNDLED_JOBS = {
+    "smoke": BUNDLED_JOB_DIR / "smoke.yaml",
+    "gate": BUNDLED_JOB_DIR / "gate.yaml",
+    "journey": BUNDLED_JOB_DIR / "journey.yaml",
+    "bff-checkout-journey": BUNDLED_JOB_DIR / "bff-checkout-journey.yaml",
 }
 
 
@@ -109,18 +109,18 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         yaml_detail = "missing"
     checks.append(("PyYAML available", yaml_ok, yaml_detail))
 
-    workflow_ok = False
-    workflow_detail = "PyYAML missing"
+    job_ok = False
+    job_detail = "PyYAML missing"
     if yaml_ok:
         try:
-            from punch.workflow import WorkflowError, load_workflow
-            for path in BUNDLED_WORKFLOWS.values():
-                load_workflow(path)
-            workflow_ok = True
-            workflow_detail = f"{len(BUNDLED_WORKFLOWS)} validated"
-        except (ImportError, WorkflowError) as error:
-            workflow_detail = str(error)
-    checks.append(("bundled workflows valid", workflow_ok, workflow_detail))
+            from punch.job import JobError, load_job
+            for path in BUNDLED_JOBS.values():
+                load_job(path)
+            job_ok = True
+            job_detail = f"{len(BUNDLED_JOBS)} validated"
+        except (ImportError, JobError) as error:
+            job_detail = str(error)
+    checks.append(("bundled jobs valid", job_ok, job_detail))
 
     for name, ok, detail in checks:
         mark = "OK  " if ok else "FAIL"
@@ -166,18 +166,18 @@ def _collect_service_logs() -> None:
             print(f"[punch] could not collect logs for {svc}: {e}", flush=True)
 
 
-def _load_selected_workflows(selector: str):
-    from punch.workflow import WorkflowError, load_workflow
+def _load_selected_jobs(selector: str):
+    from punch.job import JobError, load_job
 
-    paths = list(BUNDLED_WORKFLOWS.values()) if selector == "all" else [
-        BUNDLED_WORKFLOWS.get(selector, Path(selector))
+    paths = list(BUNDLED_JOBS.values()) if selector == "all" else [
+        BUNDLED_JOBS.get(selector, Path(selector))
     ]
-    workflows = []
+    jobs = []
     for path in paths:
         if not path.is_file():
-            raise WorkflowError(f"workflow file does not exist: {path}")
-        workflows.append(load_workflow(path))
-    return workflows
+            raise JobError(f"job file does not exist: {path}")
+        jobs.append(load_job(path))
+    return jobs
 
 
 def _effective_exit_code(result) -> int:
@@ -187,7 +187,7 @@ def _effective_exit_code(result) -> int:
 
 
 def _evidence_result(
-    workflow,
+    job,
     result,
     *,
     skipped: bool = False,
@@ -197,8 +197,8 @@ def _evidence_result(
     config: Path | None = None,
 ) -> dict:
     return {
-        "test": workflow.name,
-        "workflow": str(workflow.source_path.relative_to(workflow.working_directory)),
+        "test": job.name,
+        "job": str(job.source_path.relative_to(job.working_directory)),
         "exitCode": _effective_exit_code(result),
         "childExitCode": result.child_exit_code,
         "passed": result.passed,
@@ -206,7 +206,7 @@ def _evidence_result(
         "datasets": [
             {
                 "dataset": dataset.dataset,
-                "path": str(dataset.path.relative_to(workflow.working_directory)),
+                "path": str(dataset.path.relative_to(job.working_directory)),
                 "recordCount": dataset.record_count,
                 "published": dataset.published,
             }
@@ -216,13 +216,13 @@ def _evidence_result(
         **({"switchedFrom": list(switched_from)} if switched_from else {}),
         **({"dataSources": data_sources} if data_sources else {}),
         **({"sizing": sizing} if sizing else {}),
-        **({"config": _evidence_path(workflow, config)} if config is not None else {}),
+        **({"config": _evidence_path(job, config)} if config is not None else {}),
     }
 
 
-def _evidence_path(workflow, path: Path) -> str:
+def _evidence_path(job, path: Path) -> str:
     try:
-        return str(path.resolve().relative_to(workflow.working_directory))
+        return str(path.resolve().relative_to(job.working_directory))
     except ValueError:
         return str(path.resolve())
 
@@ -233,14 +233,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         ExecutionResult,
         confirm_delete_consumed,
         data_row_count,
-        execute_workflow,
+        execute_job,
         paths_collide,
         used_data_paths,
         data_sources,
         resolve_data_args,
         validate_produce,
     )
-    from punch.workflow import WorkflowError, read_k6_config
+    from punch.job import JobError, read_k6_config
     from punch.sizing import (
         SizingError,
         input_warnings,
@@ -255,32 +255,32 @@ def cmd_run(args: argparse.Namespace) -> int:
     started = datetime.now(timezone.utc).isoformat()
     t0 = time.monotonic()
     if args.selector == "all" and (args.produce or args.data or args.size_for):
-        print("[punch] --produce, --data, and --size-for apply to one selected workflow, not 'all'",
+        print("[punch] --produce, --data, and --size-for apply to one selected job, not 'all'",
               file=sys.stderr, flush=True)
         return 1
     config_path = Path(args.config).resolve() if args.config else None
     try:
-        workflows = _load_selected_workflows(args.selector)
+        jobs = _load_selected_jobs(args.selector)
         if config_path is not None:
             read_k6_config(config_path)
-    except WorkflowError as error:
+    except JobError as error:
         print(f"[punch] {error}", file=sys.stderr, flush=True)
         return 1
 
     results: list[dict] = []
     runnable = []
-    for workflow in workflows:
-        missing = [name for name in workflow.required_environment if not os.environ.get(name)]
+    for job in jobs:
+        missing = [name for name in job.required_environment if not os.environ.get(name)]
         if args.selector == "all" and missing:
             failure = f"missing required environment: {', '.join(missing)}"
-            print(f"[punch] SKIP {workflow.name}: {failure}", flush=True)
+            print(f"[punch] SKIP {job.name}: {failure}", flush=True)
             results.append(_evidence_result(
-                workflow,
-                ExecutionResult(workflow.name, (), None, True, failure),
+                job,
+                ExecutionResult(job.name, (), None, True, failure),
                 skipped=True,
             ))
             continue
-        runnable.append(workflow)
+        runnable.append(job)
 
     produce_args, data_args = list(args.produce), list(args.data)
     size_for: str | None = args.size_for
@@ -299,7 +299,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             catalog = load_catalog(selected.source_path.parent)
             overrides, preset = resolve_data_args(selected, data_args)
         except (CatalogError, ValueError):
-            pass  # reported by the per-workflow loop below
+            pass  # reported by the per-job loop below
         else:
             try:
                 outcome = plan_data(
@@ -333,49 +333,49 @@ def cmd_run(args: argparse.Namespace) -> int:
                         print(f"[punch] ignoring {'/'.join(ignored)} for {selected.name}",
                               flush=True)
                     produce_args, data_args, size_for = list(plan.produce), [], None
-                    workflows = runnable = [plan.workflow]
+                    jobs = runnable = [plan.job]
     switched_from = plan.switched_from if plan is not None else ()
     sizing_plan = None
     if size_for is not None and runnable:
-        sized_workflow = runnable[0]
+        sized_job = runnable[0]
         try:
-            catalog = load_catalog(sized_workflow.source_path.parent)
+            catalog = load_catalog(sized_job.source_path.parent)
             # --config names the target's shape here; the producer runs sized.
-            target = catalog.workflows.get(size_for)
+            target = catalog.jobs.get(size_for)
             target_config = config_path or (target.k6_config if target is not None else None)
             sizing_plan = size_producer(
-                sized_workflow,
+                sized_job,
                 size_for,
                 catalog,
                 read_k6_config(target_config) if target_config is not None else {},
                 preset=target_config.stem if target_config is not None else None,
             )
-        except (CatalogError, SizingError, WorkflowError) as error:
+        except (CatalogError, SizingError, JobError) as error:
             print(f"[punch] {error}", file=sys.stderr, flush=True)
             results.append(_evidence_result(
-                sized_workflow,
-                ExecutionResult(sized_workflow.name, (), None, False, str(error)),
+                sized_job,
+                ExecutionResult(sized_job.name, (), None, False, str(error)),
             ))
             runnable, stopped_rc = [], 1
         else:
             produce_args = list(dict.fromkeys([*produce_args, *sizing_plan.datasets]))
 
     protected_paths = [STATE_DIR / "punch-run.json"]
-    protected_paths.extend(LOGS_DIR / f"k6-{workflow.name}.log" for workflow in runnable)
+    protected_paths.extend(LOGS_DIR / f"k6-{job.name}.log" for job in runnable)
     if args.collect_logs:
         protected_paths.extend(LOGS_DIR / f"{service}.log" for service in SERVICE_LOG_NAMES)
 
     # A dataset aliasing a run artifact would be clobbered (or clobber it)
     # mid-run; refuse before any Docker call or evidence write.
-    for workflow in runnable:
-        if workflow.data is None:
+    for job in runnable:
+        if job.data is None:
             continue
         try:
-            produce = validate_produce(workflow, produce_args)
+            produce = validate_produce(job, produce_args)
         except ValueError:
-            continue  # reported per workflow below
+            continue  # reported per job below
         for dataset in produce:
-            destination = workflow.data.host_path(dataset)
+            destination = job.data.host_path(dataset)
             if any(paths_collide(destination, path) for path in protected_paths):
                 print(
                     f"[punch] data output collides with another run artifact: {destination}",
@@ -387,16 +387,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     _ensure_dirs()
 
     overall_rc = 0
-    for workflow in runnable:
+    for job in runnable:
         try:
-            catalog = load_catalog(workflow.source_path.parent)
-            produce = validate_produce(workflow, produce_args)
-            overrides, preset = resolve_data_args(workflow, data_args)
+            catalog = load_catalog(job.source_path.parent)
+            produce = validate_produce(job, produce_args)
+            overrides, preset = resolve_data_args(job, data_args)
         except (CatalogError, ValueError) as error:
             print(f"[punch] {error}", file=sys.stderr, flush=True)
             results.append(_evidence_result(
-                workflow,
-                ExecutionResult(workflow.name, (), None, False, str(error)),
+                job,
+                ExecutionResult(job.name, (), None, False, str(error)),
                 switched_from=switched_from,
             ))
             overall_rc = overall_rc or 1
@@ -411,31 +411,31 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(line, flush=True)
             row_counts = {
                 dataset: data_row_count(path)
-                for dataset, path in used_data_paths(workflow, overrides, choices).items()
+                for dataset, path in used_data_paths(job, overrides, choices).items()
             }
             for line in input_warnings(sizing_plan, row_counts):
                 print(line, flush=True)
 
-        result = execute_workflow(
-            workflow,
+        result = execute_job(
+            job,
             environment=os.environ,
             produce=produce,
             data_overrides=overrides,
             optional_choices=choices,
             producers_of=catalog.producers_of,
-            log_path=LOGS_DIR / f"k6-{workflow.name}.log",
+            log_path=LOGS_DIR / f"k6-{job.name}.log",
             config=config,
         )
         produced = {
             dataset.dataset: dataset.record_count for dataset in result.datasets if dataset.published
         }
         results.append(_evidence_result(
-            workflow,
+            job,
             result,
             switched_from=switched_from,
-            data_sources=data_sources(workflow, overrides, choices),
+            data_sources=data_sources(job, overrides, choices),
             sizing=sizing_evidence(sizing_plan, produced) if sizing_plan is not None else None,
-            config=config or workflow.k6_config,
+            config=config or job.k6_config,
         ))
         if result.passed and switched_from:
             print(switch_hint(plan, catalog), flush=True)
@@ -445,7 +445,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(next_hint(sizing_plan, produced), flush=True)
         if result.child_exit_code is not None:
             confirm_delete_consumed(
-                used_data_paths(workflow, overrides, choices), stdin=sys.stdin, stdout=sys.stdout
+                used_data_paths(job, overrides, choices), stdin=sys.stdin, stdout=sys.stdout
             )
         effective_exit_code = _effective_exit_code(result)
         if not result.passed and overall_rc == 0:
@@ -459,7 +459,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     overall_rc = overall_rc or stopped_rc
     _write_evidence({
         "command": "run",
-        "tests": [workflow.name for workflow in workflows],
+        "tests": [job.name for job in jobs],
         "results": results,
         "exitCode": overall_rc,
         "passed": overall_rc == 0,
@@ -472,8 +472,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_menu(args: argparse.Namespace) -> int:
     from punch.menu import run_menu
 
-    workflows_dir = Path(args.workflows_dir) if args.workflows_dir else BUNDLED_WORKFLOW_DIR
-    return run_menu(workflows_dir, state_dir=STATE_DIR)
+    jobs_dir = Path(args.jobs_dir) if args.jobs_dir else BUNDLED_JOB_DIR
+    return run_menu(jobs_dir, state_dir=STATE_DIR)
 
 
 def cmd_clean(_args: argparse.Namespace) -> int:
@@ -489,8 +489,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="Check host prerequisites (docker, compose, python).")
 
-    run_p = sub.add_parser("run", help="Run a bundled k6 workflow, all workflows, or a YAML path.")
-    run_p.add_argument("selector", help="Bundled workflow name, 'all', or a workflow YAML path.")
+    run_p = sub.add_parser("run", help="Run a bundled k6 job, all jobs, or a YAML path.")
+    run_p.add_argument("selector", help="Bundled job name, 'all', or a job YAML path.")
     run_p.add_argument("--keep-going", action="store_true",
                        help="With 'all', continue subsequent tests after a failure.")
     run_p.add_argument("--collect-logs", action="store_true",
@@ -503,20 +503,20 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Never open the data-source or producer pickers.")
     run_p.add_argument("--config", metavar="PATH", default=None,
                        help="k6 options JSON passed as `k6 run --config` "
-                            "(default: the workflow's spec.k6.config).")
+                            "(default: the job's spec.k6.config).")
     run_p.add_argument("--size-for", metavar="TARGET", default=None,
                        help="Size this producer run for TARGET: rows from TARGET's k6 config "
                             "(--config, else TARGET's spec.k6.config) plus its margin; "
                             "implies --produce for the datasets it feeds TARGET.")
 
     menu_p = sub.add_parser(
-        "menu", help="Interactively pick and run a k6 workflow from a directory."
+        "menu", help="Interactively pick and run a k6 job from a directory."
     )
     menu_p.add_argument(
-        "workflows_dir",
+        "jobs_dir",
         nargs="?",
         default=None,
-        help="Directory of workflow YAML files (default: Punch's own bundled workflows/k6).",
+        help="Directory of job YAML files (default: Punch's own bundled jobs/k6).",
     )
 
     sub.add_parser("clean", help="Tear down compose stack and volumes.")

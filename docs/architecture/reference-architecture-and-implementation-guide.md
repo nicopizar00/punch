@@ -11,15 +11,13 @@ from a laptop to GitHub Actions (section 9), how a consumer migrates to the
 job terms (section 10), and how to reproduce Punch's core in a restricted
 environment without importing it. Source and tests (end of page) stay
 authoritative. Layer ownership: [punch-boundaries.md](punch-boundaries.md).
-Evidence contract: [validation.md](../workflows/validation.md).
+Evidence contract: [validation.md](../jobs/validation.md).
 
-> **Terms ([ADR 0007](../decisions/0007-job-terminology.md): accepted, not
+> **Terms ([ADR 0007](../decisions/0007-job-terminology.md): accepted,
 > built).** A **Punch job** is one YAML unit and one k6 run. A **Punch
 > workflow** is an ordered sequence of Punch jobs linked by datasets, and a
 > **step** is a job's place in it. "Workflow" alone means a GitHub workflow
-> or an Argo Workflow. This page uses those terms. Until the rename lands,
-> the code, files, and YAML keep the old names (`kind: K6Workflow`,
-> `punch.workflow`, `workflows/k6/`); section 10 maps each one.
+> or an Argo Workflow. This page uses those terms.
 
 ## 1. Solution
 
@@ -59,7 +57,7 @@ know nothing about orchestration.
 | ------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
 | CLI / assembly root | [`__main__.py`](../../src/punch/__main__.py)   | Arguments, sequencing, exit codes, `punch-run.json`        |
 | Menu adapter        | [`menu.py`](../../src/punch/menu.py)           | Terminal discovery, choices, confirmation                  |
-| Loader              | [`workflow.py`](../../src/punch/workflow.py)   | Immutable models, strict YAML/JSON, path containment       |
+| Loader              | [`job.py`](../../src/punch/job.py)   | Immutable models, strict YAML/JSON, path containment       |
 | Catalog             | [`catalog.py`](../../src/punch/catalog.py)     | Cross-job dataset links and lookups                        |
 | Data planner        | [`data_plan.py`](../../src/punch/data_plan.py) | Source choice and producer switching (pure)                |
 | Sizing planner      | [`sizing.py`](../../src/punch/sizing.py)       | Demand normalization, sizing math, generated config (pure) |
@@ -69,8 +67,8 @@ Adapters depend on engine modules; engine modules never import presentation.
 
 ## 2. Core contracts
 
-**Job** (`apiVersion: punch/v1`, `kind: K6Job`; the loader accepts
-`kind: K6Workflow` until the rename lands). Declarative facts only; unknown or
+**Job** (`apiVersion: punch/v1`, `kind: K6Job`; a `kind: K6Workflow` file
+fails with the rename message in section 10). Declarative facts only; unknown or
 duplicate keys, invalid names, missing files, and paths escaping
 `workingDirectory` fail at load:
 
@@ -211,14 +209,14 @@ Use neutral sample jobs; keep business URLs, credentials, and data out.
 
 | Concern                              | Source                                         | Proof                                                                                                                          |
 | ------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Schema and path containment          | [`workflow.py`](../../src/punch/workflow.py)   | [`test_workflow.py`](../../tests/test_workflow.py)                                                                             |
+| Schema and path containment          | [`job.py`](../../src/punch/job.py)   | [`test_job.py`](../../tests/test_job.py)                                                                             |
 | Catalog links                        | [`catalog.py`](../../src/punch/catalog.py)     | [`test_catalog.py`](../../tests/test_catalog.py)                                                                               |
 | Data planning and switching          | [`data_plan.py`](../../src/punch/data_plan.py) | [`test_data_plan.py`](../../tests/test_data_plan.py)                                                                           |
 | Command, streams, data, cancellation | [`execution.py`](../../src/punch/execution.py) | [`test_execution.py`](../../tests/test_execution.py)                                                                           |
 | Sizing and generated config          | [`sizing.py`](../../src/punch/sizing.py)       | [`test_sizing.py`](../../tests/test_sizing.py)                                                                                 |
 | Interactive selection                | [`menu.py`](../../src/punch/menu.py)           | [`test_menu.py`](../../tests/test_menu.py)                                                                                     |
 | CLI sequencing and evidence          | [`__main__.py`](../../src/punch/__main__.py)   | [`test_cli.py`](../../tests/test_cli.py)                                                                                       |
-| End-to-end contracts                 | —                                              | [`test_ci_contract.py`](../../tests/test_ci_contract.py), [`test_workflow_coverage.py`](../../tests/test_workflow_coverage.py) |
+| End-to-end contracts                 | —                                              | [`test_ci_contract.py`](../../tests/test_ci_contract.py), [`test_job_coverage.py`](../../tests/test_job_coverage.py) |
 
 When prose and tested behavior disagree, fix the prose or make an explicit,
 tested contract change.
@@ -259,11 +257,11 @@ terminal.
 ## 10. Migrating from Punch workflows to Punch jobs
 
 [ADR 0007](../decisions/0007-job-terminology.md) renames the YAML unit to a
-Punch job. The decision is accepted and not built: every name in the "Today"
-column is what Punch accepts now. Switch to the "After" column in the same
-change that pins the Punch commit landing the rename. There are no aliases.
+Punch job. The rename is built. A consumer still on the old names moves from
+the "Before" column to the "After" column in the change that pins this Punch
+version. There are no aliases.
 
-| Area | Today | After |
+| Area | Before | After |
 | --- | --- | --- |
 | YAML | `apiVersion: punch/v1`, `kind: K6Workflow` | `apiVersion: punch/v1`, `kind: K6Job` |
 | Loader | `punch.workflow`: `K6Workflow`, `WorkflowError`, `load_workflow` | `punch.job`: `K6Job`, `JobError`, `load_job` |
@@ -278,8 +276,8 @@ change that pins the Punch commit landing the rename. There are no aliases.
 A consumer migrates in one change, pinned to the Punch commit that lands the
 rename:
 
-1. Change `kind: K6Workflow` to `kind: K6Job` in every job file. After the
-   rename, a file left behind fails with
+1. Change `kind: K6Workflow` to `kind: K6Job` in every job file. A file
+   left behind fails with
    `kind K6Workflow was renamed to K6Job; change the kind line`.
 2. Replace imports and names from the table. A missed import fails with
    `ModuleNotFoundError: No module named 'punch.workflow'`.

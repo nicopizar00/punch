@@ -17,7 +17,7 @@ crossing. Components, contracts, and design decisions:
 │   never owns:         orchestration logic                    │
 ├──────────────────────────────────────────────────────────────┤
 │ Punch engine          src/punch/**                           │
-│   owns:               CLI, workflow loading, catalog, data   │
+│   owns:               CLI, job loading, catalog, data        │
 │                       and sizing plans, compose launch,      │
 │                       stream forwarding, k6 log, dataset     │
 │                       preflight and harvesting, exit codes,  │
@@ -52,8 +52,8 @@ crossing. Components, contracts, and design decisions:
 
 ## Reusable engine and consumer workloads
 
-Consumer repositories own workflow YAML and k6 scripts. Punch owns the
-reusable `src/punch/` engine. This repository's `workflows/k6/*.yaml` and k6
+Consumer repositories own job YAML and k6 scripts. Punch owns the
+reusable `src/punch/` engine. This repository's `jobs/k6/*.yaml` and k6
 files are bundled fixtures that demonstrate the engine; they do not make Punch
 the owner of a consumer's workloads.
 
@@ -66,7 +66,7 @@ A second runtime for consumers on Kubernetes
 |---|---|---|
 | `k8s/punch-k6-run.yaml` | Step shape: parameters, env, mounts, S3 artifacts, deadline | Consumer images, presets, targets |
 | `k8s/k6-run.sh` | Validation, preflight, `[DATA]` harvest, atomic publication | Scheduling, S3 I/O (Argo's executor) |
-| Consumer | Thin per-workflow templates, image mapping, `punch-k6-options`, artifact repository | The step's semantics |
+| Consumer | Thin per-job templates, image mapping, `punch-k6-options`, artifact repository | The step's semantics |
 
 Anti-pattern 4 below is a compose-runtime rule: on Kubernetes, k6 runs
 directly in the step's pod.
@@ -76,7 +76,7 @@ directly in the step's pod.
 | Layer | May call | Must not call |
 |---|---|---|
 | Bash wrapper | Punch engine | — |
-| Punch engine | one `docker compose ... run --rm` per workflow | host `npm` or `k6`; dependency installs during `run` |
+| Punch engine | one `docker compose ... run --rm` per job | host `npm` or `k6`; dependency installs during `run` |
 | Docker Compose | containers | the engine |
 | Docker images | their own dependency installs | other services, the engine |
 | k6 test code | HTTP to compose-network hostnames | the engine, Compose, Docker |

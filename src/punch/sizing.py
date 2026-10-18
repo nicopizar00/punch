@@ -1,6 +1,6 @@
 """Size a producer run for the rows a target run reads.
 
-Standard-library only. Pace, budget, and margin come from each workflow's
+Standard-library only. Pace, budget, and margin come from each job's
 `spec.sizing`; producer → target links from `spec.data.produces[].targets`.
 The load shape is the k6 options JSON a run passes to `k6 run --config`:
 Punch reads a target's shape from the config it would run with, and runs a
@@ -18,8 +18,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping
 
-from punch.catalog import WorkflowCatalog
-from punch.workflow import K6Workflow, WorkflowError, read_k6_config
+from punch.catalog import JobCatalog
+from punch.job import K6Job, JobError, read_k6_config
 
 # Top-level k6 execution shortcuts; a sized producer config replaces them.
 SHORTCUT_KEYS = ("vus", "iterations", "duration", "stages")
@@ -41,8 +41,8 @@ class SizingError(ValueError):
 
 @dataclass(frozen=True)
 class SizingPlan:
-    producer: K6Workflow
-    target: K6Workflow
+    producer: K6Job
+    target: K6Job
     datasets: tuple[str, ...]
     shape: Mapping[str, Any]
     rows_needed: int
@@ -124,8 +124,8 @@ def target_shape(config: Mapping[str, Any]) -> dict[str, Any]:
     return shape
 
 
-def is_sizable_producer(workflow: K6Workflow) -> bool:
-    sizing = workflow.sizing
+def is_sizable_producer(job: K6Job) -> bool:
+    sizing = job.sizing
     return (
         sizing is not None
         and sizing.iteration_seconds is not None
@@ -133,7 +133,7 @@ def is_sizable_producer(workflow: K6Workflow) -> bool:
     )
 
 
-def sizing_pairs(producer: K6Workflow, catalog: WorkflowCatalog) -> tuple[tuple[str, str], ...]:
+def sizing_pairs(producer: K6Job, catalog: JobCatalog) -> tuple[tuple[str, str], ...]:
     """(dataset, target) for every sized target of a sizable producer, in YAML order."""
     if producer.data is None or not is_sizable_producer(producer):
         return ()
@@ -141,11 +141,11 @@ def sizing_pairs(producer: K6Workflow, catalog: WorkflowCatalog) -> tuple[tuple[
         (product.dataset, target)
         for product in producer.data.produces
         for target in product.targets
-        if catalog.workflows[target].sizing is not None
+        if catalog.jobs[target].sizing is not None
     )
 
 
-def rows_needed(target: K6Workflow, config: Mapping[str, Any]) -> int:
+def rows_needed(target: K6Job, config: Mapping[str, Any]) -> int:
     """Rows one target run with `config` reads (one per iteration), or a SizingError reason."""
     shape = target_shape(config)
     if shape["executor"] == "shared-iterations":
@@ -158,11 +158,11 @@ def rows_needed(target: K6Workflow, config: Mapping[str, Any]) -> int:
     return math.ceil(shape["vus"] * seconds / _exact(target.sizing.iteration_seconds))
 
 
-def producer_config(producer: K6Workflow, iterations: int, vus: int) -> dict[str, Any]:
+def producer_config(producer: K6Job, iterations: int, vus: int) -> dict[str, Any]:
     """The producer's own config with its execution replaced by the sized shape."""
     try:
         base = read_k6_config(producer.k6_config) if producer.k6_config is not None else {}
-    except WorkflowError as error:
+    except JobError as error:
         raise SizingError(str(error)) from None
     config = {key: value for key, value in base.items() if key not in SHORTCUT_KEYS}
     scenario = _single_scenario(base, f"{producer.name} config")
@@ -177,9 +177,9 @@ def producer_config(producer: K6Workflow, iterations: int, vus: int) -> dict[str
 
 
 def size_producer(
-    producer: K6Workflow,
+    producer: K6Job,
     target_name: str,
-    catalog: WorkflowCatalog,
+    catalog: JobCatalog,
     config: Mapping[str, Any],
     *,
     preset: str | None = None,
@@ -195,7 +195,7 @@ def size_producer(
     datasets = tuple(product.dataset for product in products if target_name in product.targets)
     if not datasets:
         raise SizingError(f"{producer.name} does not produce data for {target_name}")
-    target = catalog.workflows[target_name]
+    target = catalog.jobs[target_name]
     if target.sizing is None:
         raise SizingError(f"{target_name} declares no spec.sizing")
     needed = rows_needed(target, config)

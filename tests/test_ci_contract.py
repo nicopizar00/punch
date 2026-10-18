@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -55,13 +56,19 @@ class CiContractTests(unittest.TestCase):
                 self.assertNotIn("stdlib-only orchestrator", content)
                 self.assertNotIn("no pip dependencies", content)
 
+    def test_readme_quotes_the_menus_sizing_label(self) -> None:
+        menu = (REPOSITORY / "src/punch/menu.py").read_text(encoding="utf-8")
+        label = re.search(r'"(Size for a target [a-z]+)"', menu).group(1)
+        readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+        self.assertEqual(set(re.findall(r"Size for a target [a-z]+", readme)), {label})
+
     def test_adr_0001_marks_its_old_runtime_assumption_as_superseded(self) -> None:
         content = (REPOSITORY / "docs/decisions/0001-perf-engineer-host-npm.md").read_text(encoding="utf-8")
 
         self.assertIn("Superseded in part by ADR 0005", content)
         self.assertIn("stdlib/no-host-pip assumption", content)
 
-    def test_consumer_repositories_own_workflows_while_punch_owns_the_engine(self) -> None:
+    def test_consumer_repositories_own_jobs_while_punch_owns_the_engine(self) -> None:
         for relative_path in [
             ".github/instructions/punch-architecture.instructions.md",
             "docs/architecture/punch-boundaries.md",
@@ -70,7 +77,7 @@ class CiContractTests(unittest.TestCase):
                 content = (REPOSITORY / relative_path).read_text(encoding="utf-8")
                 self.assertRegex(
                     content,
-                    r"Consumer repositories own workflow YAML and k6 scripts\.\s+"
+                    r"Consumer repositories own job YAML and k6 scripts\.\s+"
                     r"Punch owns the\s+reusable `src/punch/` engine",
                 )
 
