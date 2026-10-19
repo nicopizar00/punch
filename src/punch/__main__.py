@@ -20,7 +20,13 @@ from pathlib import Path
 import socket
 from urllib.parse import urlparse
 
-from punch.data_plan import DataPlan, PickerUnavailable, PlanStop, plan_data, switch_hint
+from punch.data_plan import (
+    DataPlan,
+    PickerUnavailable,
+    PlanStop,
+    plan_data,
+    switch_hint,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORTS_DIR = REPO_ROOT / "reports"
