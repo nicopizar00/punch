@@ -233,11 +233,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         ExecutionResult,
         confirm_delete_consumed,
         data_row_count,
+        data_sources,
         execute_job,
         paths_collide,
-        used_data_paths,
-        data_sources,
         resolve_data_args,
+        used_data_paths,
         validate_produce,
     )
     from punch.job import JobError, read_k6_config
