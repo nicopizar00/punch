@@ -1,7 +1,7 @@
 # AGENTS.md
 
-Punch (`bin/punch`, `src/punch/`) runs Punch jobs, k6 runs defined in
-YAML, as one Docker Compose run each. Rules, layout, and commands live in
+Punch (`bin/punch`, `src/punch/`) runs each Punch job, a k6 run defined
+in YAML, as one Docker Compose run. Rules, layout, and commands live in
 [CLAUDE.md](CLAUDE.md); usage in [README.md](README.md). The essentials:
 
 - **Docker first.** Host needs Docker, Python 3.10+, and

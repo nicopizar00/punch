@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from punch.job import Sizing, JobError, load_job
+from punch.job import JobError, Sizing, load_job
 
 
 VALID_JOB = """\

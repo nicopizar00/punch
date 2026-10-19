@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from punch.job import K6Job, JobError, load_job
+from punch.job import JobError, K6Job, load_job
 
 
 class CatalogError(ValueError):

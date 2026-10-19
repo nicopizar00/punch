@@ -30,6 +30,7 @@ from punch.execution import (
     execute_job,
     used_data_paths,
 )
+from punch.job import JobError, K6Job, load_job, read_k6_config
 from punch.sizing import (
     SizingError,
     SizingPlan,
@@ -41,7 +42,6 @@ from punch.sizing import (
     summary_lines,
     write_producer_config,
 )
-from punch.job import K6Job, JobError, load_job, read_k6_config
 
 # Where a sized producer's generated k6 config is written (Punch's run state).
 DEFAULT_STATE_DIR = Path(__file__).resolve().parents[2] / "reports" / "state"

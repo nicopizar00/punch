@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from punch.catalog import JobCatalog
-from punch.job import K6Job, JobError, read_k6_config
+from punch.job import JobError, K6Job, read_k6_config
 
 # Top-level k6 execution shortcuts; a sized producer config replaces them.
 SHORTCUT_KEYS = ("vus", "iterations", "duration", "stages")
