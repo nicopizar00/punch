@@ -153,7 +153,7 @@ evidence rules: [validation.md](docs/jobs/validation.md).
 | [Boundaries](docs/architecture/punch-boundaries.md) | Layer ownership and anti-patterns |
 | [Validation](docs/jobs/validation.md) | Evidence contract |
 | [Decisions](docs/decisions/) | ADRs |
-| [Specs](docs/specs/) | Feature specs: data pickers, target sizing, native k6 config |
+| [Specs](docs/specs/) | Feature specs: data pickers, target sizing, native k6 config, menu workflows (proposed) |
 | [CLAUDE.md](CLAUDE.md) | Project rules |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, PRs |
 
