@@ -76,6 +76,7 @@ docker compose build
 ./bin/punch clean
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
 ruff check src tests                      # ruff 0.7.4; the CI lint gate
+ruff format --check src tests             # the CI format gate (line length 100)
 ```
 
 ## Notes for AI assistants

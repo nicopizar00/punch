@@ -63,6 +63,19 @@ class CiContractTests(unittest.TestCase):
         self.assertRegex(config, r'(?m)^extend-select = \["I"\]$')
         self.assertRegex(config, r'(?m)^known-first-party = \["punch"\]$')
 
+    def test_ci_checks_ruff_formatting_before_the_unit_tests(self) -> None:
+        workflow = yaml.safe_load(
+            (REPOSITORY / ".github/workflows/k6.yml").read_text(encoding="utf-8")
+        )
+        runs = [step.get("run") for step in workflow["jobs"]["test-suite"]["steps"]]
+        self.assertIn("ruff format --check src tests", runs)
+        self.assertLess(
+            runs.index("ruff format --check src tests"),
+            runs.index("PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v"),
+        )
+        config = (REPOSITORY / "ruff.toml").read_text(encoding="utf-8")
+        self.assertRegex(config, r"(?m)^line-length = 100$")
+
     def test_active_guidance_declares_the_pinned_pyyaml_runtime(self) -> None:
         paths = [
             "src/punch/__main__.py",

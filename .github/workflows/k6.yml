@@ -28,6 +28,9 @@ jobs:
       - name: Lint Python (ruff, including import order)
         run: ruff check src tests
 
+      - name: Check Python formatting (ruff)
+        run: ruff format --check src tests
+
       - name: Run Punch unit tests
         run: PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 
