@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-
 REPOSITORY = Path(__file__).resolve().parents[1]
 
 
@@ -41,6 +40,18 @@ class CiContractTests(unittest.TestCase):
         self.assertLess(install, unit_tests)
         self.assertLess(unit_tests, build)
         self.assertLess(build, run)
+
+    def test_ci_lints_imports_before_the_unit_tests(self) -> None:
+        workflow = yaml.safe_load((REPOSITORY / ".github/workflows/k6.yml").read_text(encoding="utf-8"))
+        runs = [step.get("run") for step in workflow["jobs"]["test-suite"]["steps"]]
+        self.assertIn('python -m pip install "ruff==0.7.4"', runs)
+        self.assertIn("ruff check src tests", runs)
+        self.assertLess(runs.index("ruff check src tests"), runs.index(
+            "PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v"
+        ))
+        config = (REPOSITORY / "ruff.toml").read_text(encoding="utf-8")
+        self.assertRegex(config, r'(?m)^extend-select = \["I"\]$')
+        self.assertRegex(config, r'(?m)^known-first-party = \["punch"\]$')
 
     def test_active_guidance_declares_the_pinned_pyyaml_runtime(self) -> None:
         paths = [

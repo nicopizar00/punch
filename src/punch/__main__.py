@@ -12,12 +12,12 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-import socket
 from urllib.parse import urlparse
 
 from punch.data_plan import (

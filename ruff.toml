@@ -1,0 +1,10 @@
+# Ruff settings for the Punch engine and its tests. Ruff's default lint rules
+# plus import sorting, which CI's `ruff check src tests` enforces.
+
+[lint]
+extend-select = ["I"]
+
+[lint.isort]
+# The engine lives under src/ (on PYTHONPATH in CI and tests); naming it keeps
+# `punch` imports in the first-party section after third-party ones.
+known-first-party = ["punch"]

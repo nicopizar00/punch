@@ -14,8 +14,6 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.__main__ import main
-from punch.job import load_job
-
 
 FAKE_DOCKER = """#!/usr/bin/env python3
 import json

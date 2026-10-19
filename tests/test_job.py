@@ -9,7 +9,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.job import JobError, Sizing, load_job
 
-
 VALID_JOB = """\
 apiVersion: punch/v1
 kind: K6Job

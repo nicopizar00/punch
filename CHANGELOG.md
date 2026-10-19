@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ### Added
 
+- CI lints `src` and `tests` with ruff 0.7.4 before the unit suite: Ruff's
+  default rules plus import sorting (`ruff.toml`).
 - Native k6 config: `spec.k6.config` and `punch run --config <path>` pass the
   load shape as `k6 run --config`; the menu offers presets from `options/`.
 - Target data sizing: `spec.sizing` (`iterationSeconds`, `maxSeconds`,

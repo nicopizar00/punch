@@ -22,7 +22,6 @@ from punch.execution import (
 )
 from punch.job import load_job
 
-
 FAKE_DOCKER = """#!/usr/bin/env python3
 import os
 import sys

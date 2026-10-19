@@ -80,8 +80,9 @@ If `punch-run.json` is missing, the change has not been verified.
 
 ## CI
 
-`.github/workflows/k6.yml` installs `requirements.txt`, runs the Python unit
-suite, builds images, runs `./bin/punch run all`, collects service logs, and
+`.github/workflows/k6.yml` installs `requirements.txt`, lints `src` and `tests`
+with ruff 0.7.4 (Ruff's default rules plus import sorting,
+[`ruff.toml`](../../ruff.toml)), runs the Python unit suite, builds images, runs `./bin/punch run all`, collects service logs, and
 uploads `reports/` as `performance-suite-reports`. A second job,
 `validate-artifacts`, downloads that artifact without live containers and
 fails if an expected file is missing. `tests/test_ci_contract.py` pins the

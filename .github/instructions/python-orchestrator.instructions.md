@@ -44,4 +44,5 @@ Scope: `bin/punch` and `src/punch/`. Module map:
 
 `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'` — one
 `tests/test_<module>.py` per engine module, plus CLI, CI-contract, and
-job-coverage tests.
+job-coverage tests. CI runs `ruff check src tests` (ruff 0.7.4; `ruff.toml`:
+default rules plus import sorting) before the suite.

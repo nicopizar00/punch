@@ -75,6 +75,7 @@ docker compose build
 ./bin/punch menu [jobs-dir]
 ./bin/punch clean
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
+ruff check src tests                      # ruff 0.7.4; the CI lint gate
 ```
 
 ## Notes for AI assistants

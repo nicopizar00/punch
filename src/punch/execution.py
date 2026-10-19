@@ -17,7 +17,6 @@ from typing import IO, Callable, Mapping, Sequence
 
 from punch.job import DataProduct, K6Job, data_env_name
 
-
 DATA_TAG_PATTERN = re.compile(r"^\[DATA ([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\] ?(.*)$")
 PROCESS_STOP_TIMEOUT_SECONDS = 1.0
 INTERRUPT_GRACE_TIMEOUT_SECONDS = 10.0
