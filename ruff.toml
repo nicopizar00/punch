@@ -1,5 +1,9 @@
 # Ruff settings for the Punch engine and its tests. Ruff's default lint rules
-# plus import sorting, which CI's `ruff check src tests` enforces.
+# plus import sorting, which CI's `ruff check src tests` enforces, and the
+# formatter, which CI's `ruff format --check src tests` enforces.
+
+# 100 matches the code as written: under 1% of its lines were longer.
+line-length = 100
 
 [lint]
 extend-select = ["I"]

@@ -24,17 +24,23 @@ class JobCatalog:
     jobs: Mapping[str, K6Job]
 
     def producers_of(self, dataset: str) -> tuple[str, ...]:
-        return tuple(sorted(
-            name for name, job in self.jobs.items()
-            if job.data is not None and job.data.product(dataset) is not None
-        ))
+        return tuple(
+            sorted(
+                name
+                for name, job in self.jobs.items()
+                if job.data is not None and job.data.product(dataset) is not None
+            )
+        )
 
     def consumers_of(self, dataset: str) -> tuple[str, ...]:
-        return tuple(sorted(
-            name for name, job in self.jobs.items()
-            if job.data is not None
-            and (dataset in job.data.requires or dataset in job.data.optional)
-        ))
+        return tuple(
+            sorted(
+                name
+                for name, job in self.jobs.items()
+                if job.data is not None
+                and (dataset in job.data.requires or dataset in job.data.optional)
+            )
+        )
 
     def recommended_producer(self, dataset: str) -> str | None:
         """First producer, by name, that flags `dataset` as recommended."""

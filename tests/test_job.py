@@ -65,9 +65,7 @@ class LoadJobTests(unittest.TestCase):
             document = document.replace(original, updated, 1)
         path.write_text(document, encoding="utf-8")
 
-    def assertJobError(
-        self, message: str, replacement: tuple[str, str] | None = None
-    ) -> None:
+    def assertJobError(self, message: str, replacement: tuple[str, str] | None = None) -> None:
         self.write_job(self.job_path, replacement)
         with self.assertRaisesRegex(JobError, message):
             load_job(self.job_path)
@@ -100,7 +98,10 @@ class LoadJobTests(unittest.TestCase):
     def test_rejects_unknown_properties(self) -> None:
         self.assertJobError(
             "unknown field spec.k6.arguments",
-            ("    script: /scripts/csv-fixture.js", "    script: /scripts/csv-fixture.js\n    arguments: []"),
+            (
+                "    script: /scripts/csv-fixture.js",
+                "    script: /scripts/csv-fixture.js\n    arguments: []",
+            ),
         )
 
     def test_rejects_duplicate_yaml_keys(self) -> None:
@@ -160,7 +161,8 @@ class LoadJobTests(unittest.TestCase):
         (self.root / "nested").mkdir()
         (self.root / "nested" / "docker-compose.yml").touch()
         self.assertJobError(
-            "job file must be beneath spec.workingDirectory", ("workingDirectory: .", "workingDirectory: nested")
+            "job file must be beneath spec.workingDirectory",
+            ("workingDirectory: .", "workingDirectory: nested"),
         )
 
     def test_requires_an_existing_compose_file(self) -> None:
@@ -177,11 +179,16 @@ class LoadJobTests(unittest.TestCase):
 
     def test_reads_k6_config_beneath_working_directory(self) -> None:
         (self.root / "options").mkdir()
-        (self.root / "options" / "5-iterations.json").write_text('{"iterations": 5}', encoding="utf-8")
-        self.write_job(self.job_path, (
-            "    script: /scripts/csv-fixture.js",
-            "    script: /scripts/csv-fixture.js\n    config: options/5-iterations.json",
-        ))
+        (self.root / "options" / "5-iterations.json").write_text(
+            '{"iterations": 5}', encoding="utf-8"
+        )
+        self.write_job(
+            self.job_path,
+            (
+                "    script: /scripts/csv-fixture.js",
+                "    script: /scripts/csv-fixture.js\n    config: options/5-iterations.json",
+            ),
+        )
         self.assertEqual(
             load_job(self.job_path).k6_config, self.root / "options" / "5-iterations.json"
         )
@@ -198,10 +205,13 @@ class LoadJobTests(unittest.TestCase):
         }
         for message, value in cases.items():
             with self.subTest(value=value):
-                self.assertJobError(message, (
-                    "    script: /scripts/csv-fixture.js",
-                    f"    script: /scripts/csv-fixture.js\n    config: {value}",
-                ))
+                self.assertJobError(
+                    message,
+                    (
+                        "    script: /scripts/csv-fixture.js",
+                        f"    script: /scripts/csv-fixture.js\n    config: {value}",
+                    ),
+                )
 
     def test_allows_job_without_environment_or_data(self) -> None:
         job = load_job(self.minimal_path)
@@ -225,6 +235,7 @@ class LoadJobTests(unittest.TestCase):
 
     def test_data_env_name(self) -> None:
         from punch.job import data_env_name
+
         self.assertEqual(data_env_name("orders"), "DATA_ORDERS_CSV")
         self.assertEqual(data_env_name("cart-items"), "DATA_CART_ITEMS_CSV")
 
@@ -260,7 +271,9 @@ class LoadJobTests(unittest.TestCase):
         self.assertJobError("dataset must match", ("dataset: orders", "dataset: Orders"))
 
     def test_rejects_invalid_required_dataset_name(self) -> None:
-        self.assertJobError("requires dataset must match", ("requires: [carts]", "requires: [Carts]"))
+        self.assertJobError(
+            "requires dataset must match", ("requires: [carts]", "requires: [Carts]")
+        )
 
     def test_rejects_duplicate_produced_dataset(self) -> None:
         self.assertJobError(
@@ -281,7 +294,10 @@ class LoadJobTests(unittest.TestCase):
     def test_parses_optional_datasets(self) -> None:
         self.write_job(
             self.job_path,
-            ("    requires: [carts]\n", "    requires: [carts]\n    optional: [orders-in, extra]\n"),
+            (
+                "    requires: [carts]\n",
+                "    requires: [carts]\n    optional: [orders-in, extra]\n",
+            ),
         )
         job = load_job(self.job_path)
         self.assertEqual(job.data.optional, ("orders-in", "extra"))
@@ -329,24 +345,37 @@ class LoadJobTests(unittest.TestCase):
         )
 
     def test_rejects_empty_columns(self) -> None:
-        self.assertJobError("columns must be a non-empty list", ("columns: [orderId]", "columns: []"))
+        self.assertJobError(
+            "columns must be a non-empty list", ("columns: [orderId]", "columns: []")
+        )
 
     def test_rejects_invalid_column_name(self) -> None:
-        self.assertJobError("columns entries must match", ("columns: [orderId]", "columns: [order-id]"))
+        self.assertJobError(
+            "columns entries must match", ("columns: [orderId]", "columns: [order-id]")
+        )
 
     def test_rejects_duplicate_column(self) -> None:
-        self.assertJobError("duplicate column", ("columns: [orderId]", "columns: [orderId, orderId]"))
+        self.assertJobError(
+            "duplicate column", ("columns: [orderId]", "columns: [orderId, orderId]")
+        )
 
     def test_rejects_empty_targets(self) -> None:
-        self.assertJobError("targets must be a non-empty list", ("targets: [order-status]", "targets: []"))
+        self.assertJobError(
+            "targets must be a non-empty list", ("targets: [order-status]", "targets: []")
+        )
 
     def test_rejects_invalid_target_name(self) -> None:
-        self.assertJobError("targets entries must match", ("targets: [order-status]", "targets: [Order]"))
+        self.assertJobError(
+            "targets entries must match", ("targets: [order-status]", "targets: [Order]")
+        )
 
     def test_rejects_unknown_product_field(self) -> None:
         self.assertJobError(
             "unknown field spec.data.produces\\[0\\].path",
-            ("        targets: [order-status]\n", "        targets: [order-status]\n        path: x.csv\n"),
+            (
+                "        targets: [order-status]\n",
+                "        targets: [order-status]\n        path: x.csv\n",
+            ),
         )
 
     def test_product_recommended_defaults_to_false(self) -> None:
@@ -356,16 +385,20 @@ class LoadJobTests(unittest.TestCase):
     def test_product_recommended_true_is_loaded(self) -> None:
         self.write_job(
             self.job_path,
-            ("        targets: [order-status]\n",
-             "        targets: [order-status]\n        recommended: true\n"),
+            (
+                "        targets: [order-status]\n",
+                "        targets: [order-status]\n        recommended: true\n",
+            ),
         )
         self.assertTrue(load_job(self.job_path).data.produces[0].recommended)
 
     def test_rejects_non_boolean_recommended(self) -> None:
         self.assertJobError(
             "spec.data.produces\\[0\\].recommended must be a boolean",
-            ("        targets: [order-status]\n",
-             "        targets: [order-status]\n        recommended: \"yes\"\n"),
+            (
+                "        targets: [order-status]\n",
+                '        targets: [order-status]\n        recommended: "yes"\n',
+            ),
         )
 
     SIZING_ANCHOR = "    requires: [carts]\n"
@@ -397,19 +430,26 @@ class LoadJobTests(unittest.TestCase):
             ("  sizing:\n", "spec.sizing must be a mapping"),
             ("  sizing:\n    unknown: 1\n", "unknown field spec.sizing.unknown"),
             ("  sizing:\n    margin: -1\n", "spec.sizing.margin must be 0 or greater"),
-            ("  sizing:\n    iterationSeconds: 0\n",
-             "spec.sizing.iterationSeconds must be greater than 0"),
+            (
+                "  sizing:\n    iterationSeconds: 0\n",
+                "spec.sizing.iterationSeconds must be greater than 0",
+            ),
             ("  sizing:\n    maxSeconds: -5\n", "spec.sizing.maxSeconds must be greater than 0"),
             ("  sizing:\n    maxSeconds: true\n", "spec.sizing.maxSeconds must be a number"),
-            ('  sizing:\n    iterationSeconds: "1"\n',
-             "spec.sizing.iterationSeconds must be a number"),
+            (
+                '  sizing:\n    iterationSeconds: "1"\n',
+                "spec.sizing.iterationSeconds must be a number",
+            ),
             ("  sizing:\n    margin: .inf\n", "spec.sizing.margin must be a number"),
-            ("  sizing:\n    iterationSeconds: .nan\n",
-             "spec.sizing.iterationSeconds must be a number"),
+            (
+                "  sizing:\n    iterationSeconds: .nan\n",
+                "spec.sizing.iterationSeconds must be a number",
+            ),
         ]
         for block, message in cases:
             with self.subTest(block=block):
                 self.assertJobError(message, self.with_sizing(block))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -125,7 +125,11 @@ class CliTests(unittest.TestCase):
     def fake_docker_arguments(self) -> list[str]:
         if not self.args_path.exists():
             return []
-        return [argument for line in self.args_path.read_text(encoding="utf-8").splitlines() for argument in json.loads(line)]
+        return [
+            argument
+            for line in self.args_path.read_text(encoding="utf-8").splitlines()
+            for argument in json.loads(line)
+        ]
 
     def compose_run_count(self) -> int:
         return sum(arguments.count("run") == 2 for arguments in self.fake_docker_calls())
@@ -133,7 +137,9 @@ class CliTests(unittest.TestCase):
     def fake_docker_calls(self) -> list[list[str]]:
         if not self.args_path.exists():
             return []
-        return [json.loads(line) for line in self.args_path.read_text(encoding="utf-8").splitlines()]
+        return [
+            json.loads(line) for line in self.args_path.read_text(encoding="utf-8").splitlines()
+        ]
 
     def test_named_selector_resolves_bundled_yaml_and_runs_once(self) -> None:
         rc = main(["run", "smoke"])
@@ -298,13 +304,15 @@ class CliTests(unittest.TestCase):
     def add_recommended_browser_producer(self) -> None:
         text = self.producer_path.read_text(encoding="utf-8")
         (self.flows / "data-browser.yaml").write_text(
-            text.replace("name: data-producer", "name: data-browser")
-                .replace("/scripts/data-producer.js", "/scripts/data-browser.js"),
+            text.replace("name: data-producer", "name: data-browser").replace(
+                "/scripts/data-producer.js", "/scripts/data-browser.js"
+            ),
             encoding="utf-8",
         )
         self.producer_path.write_text(
-            text.replace("targets: [data-consumer]",
-                         "targets: [data-consumer]\n        recommended: true"),
+            text.replace(
+                "targets: [data-consumer]", "targets: [data-consumer]\n        recommended: true"
+            ),
             encoding="utf-8",
         )
 
@@ -398,9 +406,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn("DATA_CARTS_CSV=/scripts/data/carts.csv", call)
-        self.assertEqual(
-            self.evidence()["results"][0]["dataSources"], {"carts": "data/carts.csv"}
-        )
+        self.assertEqual(self.evidence()["results"][0]["dataSources"], {"carts": "data/carts.csv"})
 
     def test_unusable_terminal_falls_back_to_automatic_rule(self) -> None:
         self.make_consumer_optional()
@@ -536,7 +542,6 @@ class CliTests(unittest.TestCase):
             main(["run", "all"])
         plan.assert_not_called()
 
-
     def write_config(self, name: str, config: dict) -> Path:
         path = self.flows / f"{name}.json"
         path.write_text(json.dumps(config), encoding="utf-8")
@@ -544,9 +549,15 @@ class CliTests(unittest.TestCase):
 
     @staticmethod
     def iterations(count: int, vus: int = 1) -> dict:
-        return {"scenarios": {"default": {
-            "executor": "shared-iterations", "vus": vus, "iterations": count,
-        }}}
+        return {
+            "scenarios": {
+                "default": {
+                    "executor": "shared-iterations",
+                    "vus": vus,
+                    "iterations": count,
+                }
+            }
+        }
 
     def make_sizable(
         self,
@@ -597,14 +608,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         [call] = self.fake_docker_calls()
         self.assertIn(f"{config.resolve()}:/punch/k6-config.json:ro", call)
-        self.assertEqual(call[-4:], ["run", "/scripts/plain-fixture.js", "--config", "/punch/k6-config.json"])
+        self.assertEqual(
+            call[-4:], ["run", "/scripts/plain-fixture.js", "--config", "/punch/k6-config.json"]
+        )
         self.assertEqual(self.evidence()["results"][0]["config"], "flows/five.json")
 
     def test_job_config_is_the_default(self) -> None:
         config = self.write_config("default", self.iterations(5))
-        self.job_path.write_text(
-            PLAIN_JOB + "    config: flows/default.json\n", encoding="utf-8"
-        )
+        self.job_path.write_text(PLAIN_JOB + "    config: flows/default.json\n", encoding="utf-8")
         self.assertEqual(main(["run", str(self.job_path)]), 0)
         [call] = self.fake_docker_calls()
         self.assertIn(f"{config.resolve()}:/punch/k6-config.json:ro", call)
@@ -636,18 +647,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(self.carts_path.read_text(encoding="utf-8").splitlines()), 6)
         result = self.evidence()["results"][0]
         self.assertEqual(result["config"], str(sized.resolve()))
-        self.assertEqual(result["sizing"], {
-            "target": "data-consumer",
-            "datasets": ["carts"],
-            "shape": {"executor": "shared-iterations", "vus": 2, "iterations": 4},
-            "preset": "target-shape",
-            "rowsNeeded": 4,
-            "margin": 0.15,
-            "producerIterations": 5,
-            "producerVus": 1,
-            "producedRows": {"carts": 5},
-            "short": False,
-        })
+        self.assertEqual(
+            result["sizing"],
+            {
+                "target": "data-consumer",
+                "datasets": ["carts"],
+                "shape": {"executor": "shared-iterations", "vus": 2, "iterations": 4},
+                "preset": "target-shape",
+                "rowsNeeded": 4,
+                "margin": 0.15,
+                "producerIterations": 5,
+                "producerVus": 1,
+                "producedRows": {"carts": 5},
+                "short": False,
+            },
+        )
         self.assertIn("[punch] sizing data-producer for data-consumer (target-shape)", text)
         self.assertIn(
             "[punch] carts ready (5 rows); run data-consumer next with target-shape.", text
@@ -673,9 +687,15 @@ class CliTests(unittest.TestCase):
 
     def test_size_for_duration_shape_and_shortfall(self) -> None:
         self.make_sizable()
-        constant = {"scenarios": {"default": {
-            "executor": "constant-vus", "vus": 5, "duration": "5m",
-        }}}
+        constant = {
+            "scenarios": {
+                "default": {
+                    "executor": "constant-vus",
+                    "vus": 5,
+                    "duration": "5m",
+                }
+            }
+        }
         rc, text = self.run_size_for(config=constant, FAKE_DOCKER_STDOUT="[DATA carts] c,p,s")
         self.assertEqual(rc, 0)
         self.assertEqual(self.sized_config(), {"vus": 4, "iterations": 863})
@@ -688,7 +708,16 @@ class CliTests(unittest.TestCase):
         self.make_sizable()
         os.environ.update({"RUN_ID": "run-1", "FAKE_DOCKER_STDOUT": "[DATA carts] c,p,s"})
         with patch("sys.stdout", io.StringIO()):
-            rc = main(["run", str(self.producer_path), "--produce", "carts", "--size-for", "data-consumer"])
+            rc = main(
+                [
+                    "run",
+                    str(self.producer_path),
+                    "--produce",
+                    "carts",
+                    "--size-for",
+                    "data-consumer",
+                ]
+            )
         self.assertEqual(rc, 0)
         self.assertEqual(
             [dataset["dataset"] for dataset in self.evidence()["results"][0]["datasets"]], ["carts"]
@@ -727,7 +756,6 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             self.carts_path.read_text(encoding="utf-8"), "cartId,productId,sid\nc,p,s\n"
         )
-
 
     def test_size_for_producer_without_data_fails_before_docker(self) -> None:
         path = self.flows / "no-data.yaml"

@@ -11,7 +11,9 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 
 class CiContractTests(unittest.TestCase):
     def test_ci_installs_the_runtime_and_tests_before_building_and_running_punch(self) -> None:
-        workflow = yaml.safe_load((REPOSITORY / ".github/workflows/k6.yml").read_text(encoding="utf-8"))
+        workflow = yaml.safe_load(
+            (REPOSITORY / ".github/workflows/k6.yml").read_text(encoding="utf-8")
+        )
         steps = workflow["jobs"]["test-suite"]["steps"]
 
         def index_of(predicate, description: str) -> int:
@@ -30,11 +32,16 @@ class CiContractTests(unittest.TestCase):
             "pinned requirements install",
         )
         unit_tests = index_of(
-            lambda step: step.get("run") == "PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v",
+            lambda step: step.get("run")
+            == "PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v",
             "direct Python unit suite",
         )
-        build = index_of(lambda step: step.get("run") == "docker compose build", "Docker image build")
-        run = index_of(lambda step: step.get("run") == "./bin/punch run all", "YAML-backed Punch run")
+        build = index_of(
+            lambda step: step.get("run") == "docker compose build", "Docker image build"
+        )
+        run = index_of(
+            lambda step: step.get("run") == "./bin/punch run all", "YAML-backed Punch run"
+        )
 
         self.assertLess(setup, install)
         self.assertLess(install, unit_tests)
@@ -42,13 +49,16 @@ class CiContractTests(unittest.TestCase):
         self.assertLess(build, run)
 
     def test_ci_lints_imports_before_the_unit_tests(self) -> None:
-        workflow = yaml.safe_load((REPOSITORY / ".github/workflows/k6.yml").read_text(encoding="utf-8"))
+        workflow = yaml.safe_load(
+            (REPOSITORY / ".github/workflows/k6.yml").read_text(encoding="utf-8")
+        )
         runs = [step.get("run") for step in workflow["jobs"]["test-suite"]["steps"]]
         self.assertIn('python -m pip install "ruff==0.7.4"', runs)
         self.assertIn("ruff check src tests", runs)
-        self.assertLess(runs.index("ruff check src tests"), runs.index(
-            "PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v"
-        ))
+        self.assertLess(
+            runs.index("ruff check src tests"),
+            runs.index("PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v"),
+        )
         config = (REPOSITORY / "ruff.toml").read_text(encoding="utf-8")
         self.assertRegex(config, r'(?m)^extend-select = \["I"\]$')
         self.assertRegex(config, r'(?m)^known-first-party = \["punch"\]$')
@@ -74,7 +84,9 @@ class CiContractTests(unittest.TestCase):
         self.assertEqual(set(re.findall(r"Size for a target [a-z]+", readme)), {label})
 
     def test_adr_0001_marks_its_old_runtime_assumption_as_superseded(self) -> None:
-        content = (REPOSITORY / "docs/decisions/0001-perf-engineer-host-npm.md").read_text(encoding="utf-8")
+        content = (REPOSITORY / "docs/decisions/0001-perf-engineer-host-npm.md").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("Superseded in part by ADR 0005", content)
         self.assertIn("stdlib/no-host-pip assumption", content)

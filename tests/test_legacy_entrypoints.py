@@ -15,7 +15,9 @@ class LegacyEntrypointTests(unittest.TestCase):
 
     def test_package_smoke_script_routes_through_punch_without_direct_compose_run(self) -> None:
         repository = Path(__file__).resolve().parents[1]
-        script = json.loads((repository / "package.json").read_text(encoding="utf-8"))["scripts"]["test:smoke"]
+        script = json.loads((repository / "package.json").read_text(encoding="utf-8"))["scripts"][
+            "test:smoke"
+        ]
         self.assertNotIn("docker compose run", script)
         self.assertIn("bin/punch run", script)
 

@@ -31,13 +31,22 @@ TARGET_SIZING = {"iterationSeconds": 2, "margin": 0.15}
 
 
 def iterations(count: int, vus: int = 1) -> dict:
-    return {"scenarios": {"default": {
-        "executor": "shared-iterations", "vus": vus, "iterations": count, "maxDuration": "5m",
-    }}}
+    return {
+        "scenarios": {
+            "default": {
+                "executor": "shared-iterations",
+                "vus": vus,
+                "iterations": count,
+                "maxDuration": "5m",
+            }
+        }
+    }
 
 
 def constant(vus: int, duration: str) -> dict:
-    return {"scenarios": {"default": {"executor": "constant-vus", "vus": vus, "duration": duration}}}
+    return {
+        "scenarios": {"default": {"executor": "constant-vus", "vus": vus, "duration": duration}}
+    }
 
 
 def job_yaml(
@@ -49,9 +58,17 @@ def job_yaml(
     config: str | None = None,
 ) -> str:
     lines = [
-        "apiVersion: punch/v1", "kind: K6Job", "metadata:", f"  name: {name}",
-        "spec:", "  workingDirectory: .", "  compose:", "    file: docker-compose.yml",
-        "    service: k6", "  k6:", f"    script: /scripts/{name}.js",
+        "apiVersion: punch/v1",
+        "kind: K6Job",
+        "metadata:",
+        f"  name: {name}",
+        "spec:",
+        "  workingDirectory: .",
+        "  compose:",
+        "    file: docker-compose.yml",
+        "    service: k6",
+        "  k6:",
+        f"    script: /scripts/{name}.js",
     ]
     if config is not None:
         lines.append(f"    config: {config}")
@@ -111,8 +128,14 @@ class SizingCase(unittest.TestCase):
 
 class ParseDurationTests(unittest.TestCase):
     def test_parses_k6_durations(self) -> None:
-        cases = {"5m": 300, "1h30m": 5400, "90s": 90, "1m30s": 90, "1.5m": 90,
-                 "500ms": Fraction(1, 2)}
+        cases = {
+            "5m": 300,
+            "1h30m": 5400,
+            "90s": 90,
+            "1m30s": 90,
+            "1.5m": 90,
+            "500ms": Fraction(1, 2),
+        }
         for text, seconds in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(parse_duration(text), seconds)
@@ -147,12 +170,20 @@ class TargetShapeTests(unittest.TestCase):
     def test_top_level_shortcuts_follow_k6_rules(self) -> None:
         cases = [
             ({"iterations": 5}, {"executor": "shared-iterations", "vus": 1, "iterations": 5}),
-            ({"vus": 2, "iterations": 5, "duration": "1m"},
-             {"executor": "shared-iterations", "vus": 2, "iterations": 5}),
-            ({"vus": 5, "duration": "5m"}, {"executor": "constant-vus", "vus": 5, "duration": "5m"}),
+            (
+                {"vus": 2, "iterations": 5, "duration": "1m"},
+                {"executor": "shared-iterations", "vus": 2, "iterations": 5},
+            ),
+            (
+                {"vus": 5, "duration": "5m"},
+                {"executor": "constant-vus", "vus": 5, "duration": "5m"},
+            ),
             ({}, {"executor": "shared-iterations", "vus": 1, "iterations": 1}),
             # k6 ignores vus without iterations or duration: one iteration, one VU.
-            ({"vus": 3, "thresholds": {}}, {"executor": "shared-iterations", "vus": 1, "iterations": 1}),
+            (
+                {"vus": 3, "thresholds": {}},
+                {"executor": "shared-iterations", "vus": 1, "iterations": 1},
+            ),
         ]
         for config, shape in cases:
             with self.subTest(config=config):
@@ -161,8 +192,10 @@ class TargetShapeTests(unittest.TestCase):
     def test_not_estimable_configs(self) -> None:
         cases = {
             "config declares 2 scenarios; sizing needs exactly one": {
-                "scenarios": {"a": {"executor": "shared-iterations"},
-                              "b": {"executor": "shared-iterations"}},
+                "scenarios": {
+                    "a": {"executor": "shared-iterations"},
+                    "b": {"executor": "shared-iterations"},
+                },
             },
             "config declares 0 scenarios; sizing needs exactly one": {"scenarios": {}},
             "config scenario a must be an object": {"scenarios": {"a": 1}},
@@ -271,20 +304,35 @@ class ProducerConfigTests(SizingCase):
 
     def test_scenario_keeps_its_name_options_and_max_duration(self) -> None:
         base = {
-            "scenarios": {"browser_cart": {
-                "executor": "constant-vus", "vus": 9, "duration": "5m", "maxDuration": "4m",
-                "options": {"browser": {"type": "chromium"}}, "tags": {"kind": "ui"},
-            }},
+            "scenarios": {
+                "browser_cart": {
+                    "executor": "constant-vus",
+                    "vus": 9,
+                    "duration": "5m",
+                    "maxDuration": "4m",
+                    "options": {"browser": {"type": "chromium"}},
+                    "tags": {"kind": "ui"},
+                }
+            },
             "thresholds": {"checks": ["rate>0.95"]},
         }
         self.write_producer(config=self.write_config("producer-config", base))
-        self.assertEqual(self.size(iterations(5)).config, {
-            "scenarios": {"browser_cart": {
-                "maxDuration": "4m", "options": {"browser": {"type": "chromium"}},
-                "tags": {"kind": "ui"}, "executor": "shared-iterations", "vus": 1, "iterations": 6,
-            }},
-            "thresholds": {"checks": ["rate>0.95"]},
-        })
+        self.assertEqual(
+            self.size(iterations(5)).config,
+            {
+                "scenarios": {
+                    "browser_cart": {
+                        "maxDuration": "4m",
+                        "options": {"browser": {"type": "chromium"}},
+                        "tags": {"kind": "ui"},
+                        "executor": "shared-iterations",
+                        "vus": 1,
+                        "iterations": 6,
+                    }
+                },
+                "thresholds": {"checks": ["rate>0.95"]},
+            },
+        )
 
     def test_shortcut_base_drops_its_shape(self) -> None:
         base = {"vus": 9, "duration": "5m", "stages": [], "tags": {"suite": "x"}}
@@ -294,8 +342,12 @@ class ProducerConfigTests(SizingCase):
         )
 
     def test_multi_scenario_producer_config_is_not_sizable(self) -> None:
-        base = {"scenarios": {"a": {"executor": "shared-iterations"},
-                              "b": {"executor": "shared-iterations"}}}
+        base = {
+            "scenarios": {
+                "a": {"executor": "shared-iterations"},
+                "b": {"executor": "shared-iterations"},
+            }
+        }
         self.write_producer(config=self.write_config("producer-config", base))
         self.assertNotEstimable(
             "producer config declares 2 scenarios; sizing needs exactly one", iterations(5)
@@ -311,16 +363,21 @@ class ProducerConfigTests(SizingCase):
 class SizingTextTests(SizingCase):
     def test_summary_lines_with_preset(self) -> None:
         plan = self.size(iterations(5), preset="5-iterations")
-        self.assertEqual(summary_lines(plan), [
-            "[punch] sizing producer for consumer (5-iterations)",
-            "  rows needed   : 5  (shared-iterations vus=1 iterations=5)",
-            "  margin 15%   : 6 producer iterations",
-            "  producer VUS  : 1  (~6s of 270s budget)",
-        ])
+        self.assertEqual(
+            summary_lines(plan),
+            [
+                "[punch] sizing producer for consumer (5-iterations)",
+                "  rows needed   : 5  (shared-iterations vus=1 iterations=5)",
+                "  margin 15%   : 6 producer iterations",
+                "  producer VUS  : 1  (~6s of 270s budget)",
+            ],
+        )
 
     def test_summary_lines_without_preset_show_the_shape(self) -> None:
         lines = summary_lines(self.size(constant(5, "5m")))
-        self.assertEqual(lines[0], "[punch] sizing producer for consumer (constant-vus vus=5 duration=5m)")
+        self.assertEqual(
+            lines[0], "[punch] sizing producer for consumer (constant-vus vus=5 duration=5m)"
+        )
         self.assertEqual(lines[3], "  producer VUS  : 4  (~216s of 270s budget)")
 
     def test_fractional_margin_and_budget(self) -> None:
@@ -340,18 +397,23 @@ class SizingTextTests(SizingCase):
 
     def test_input_warnings_name_small_inputs(self) -> None:
         plan = self.size(iterations(5))  # 6 producer iterations
-        self.assertEqual(input_warnings(plan, {"carts": 5, "users": 6, "x": 1}), [
-            '[punch] warning: producer reads "carts" (5 rows) but runs 6 iterations; rows repeat',
-            '[punch] warning: producer reads "x" (1 row) but runs 6 iterations; rows repeat',
-        ])
+        self.assertEqual(
+            input_warnings(plan, {"carts": 5, "users": 6, "x": 1}),
+            [
+                '[punch] warning: producer reads "carts" (5 rows) but runs 6 iterations; rows repeat',
+                '[punch] warning: producer reads "x" (1 row) but runs 6 iterations; rows repeat',
+            ],
+        )
 
     def test_shortfall_compares_against_rows_needed(self) -> None:
         plan = self.size(iterations(5))
-        self.assertEqual(shortfall(plan, {"carts": 4}),
-                         ['[punch] warning: "carts" has 4 rows; consumer needs 5'])
+        self.assertEqual(
+            shortfall(plan, {"carts": 4}), ['[punch] warning: "carts" has 4 rows; consumer needs 5']
+        )
         self.assertEqual(shortfall(plan, {"carts": 5}), [])
-        self.assertEqual(shortfall(plan, {}),
-                         ['[punch] warning: "carts" has 0 rows; consumer needs 5'])
+        self.assertEqual(
+            shortfall(plan, {}), ['[punch] warning: "carts" has 0 rows; consumer needs 5']
+        )
 
     def test_next_hint_names_target_and_shape(self) -> None:
         self.assertEqual(
@@ -365,18 +427,21 @@ class SizingTextTests(SizingCase):
 
     def test_sizing_evidence(self) -> None:
         plan = self.size(iterations(5), preset="5-iterations")
-        self.assertEqual(sizing_evidence(plan, {"carts": 4}), {
-            "target": "consumer",
-            "datasets": ["carts"],
-            "shape": {"executor": "shared-iterations", "vus": 1, "iterations": 5},
-            "preset": "5-iterations",
-            "rowsNeeded": 5,
-            "margin": 0.15,
-            "producerIterations": 6,
-            "producerVus": 1,
-            "producedRows": {"carts": 4},
-            "short": True,
-        })
+        self.assertEqual(
+            sizing_evidence(plan, {"carts": 4}),
+            {
+                "target": "consumer",
+                "datasets": ["carts"],
+                "shape": {"executor": "shared-iterations", "vus": 1, "iterations": 5},
+                "preset": "5-iterations",
+                "rowsNeeded": 5,
+                "margin": 0.15,
+                "producerIterations": 6,
+                "producerVus": 1,
+                "producedRows": {"carts": 4},
+                "short": True,
+            },
+        )
         self.assertFalse(sizing_evidence(plan, {"carts": 6})["short"])
 
 

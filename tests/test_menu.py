@@ -17,12 +17,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from punch.menu import discover_jobs, run_menu
 
 DEFAULT_BASE_URL = "http://host.docker.internal:3001"
-ITERATIONS_5 = {"scenarios": {"default": {
-    "executor": "shared-iterations", "vus": 1, "iterations": 5, "maxDuration": "5m",
-}}}
-CONSTANT_5_VUS_5M = {"scenarios": {"default": {
-    "executor": "constant-vus", "vus": 5, "duration": "5m",
-}}}
+ITERATIONS_5 = {
+    "scenarios": {
+        "default": {
+            "executor": "shared-iterations",
+            "vus": 1,
+            "iterations": 5,
+            "maxDuration": "5m",
+        }
+    }
+}
+CONSTANT_5_VUS_5M = {
+    "scenarios": {
+        "default": {
+            "executor": "constant-vus",
+            "vus": 5,
+            "duration": "5m",
+        }
+    }
+}
 DEFAULT_BROWSER_BASE_URL = "http://host.docker.internal:3000"
 
 
@@ -158,7 +171,9 @@ class MenuTests(unittest.TestCase):
     def fake_docker_calls(self) -> list[list[str]]:
         if not self.args_path.exists():
             return []
-        return [json.loads(line) for line in self.args_path.read_text(encoding="utf-8").splitlines()]
+        return [
+            json.loads(line) for line in self.args_path.read_text(encoding="utf-8").splitlines()
+        ]
 
     @contextmanager
     def record_menus(self, *indices: int | None, answers: str = "yes\n"):
@@ -186,9 +201,7 @@ class MenuTests(unittest.TestCase):
     def test_discover_jobs_lists_yaml_files_sorted(self) -> None:
         self.write_job("beta")
         self.write_job("alpha")
-        self.assertEqual(
-            [path.stem for path in discover_jobs(self.root)], ["alpha", "beta"]
-        )
+        self.assertEqual([path.stem for path in discover_jobs(self.root)], ["alpha", "beta"])
 
     def test_no_jobs_reports_and_returns_1(self) -> None:
         empty_dir = self.root / "empty"
@@ -248,9 +261,7 @@ class MenuTests(unittest.TestCase):
                 with patch("builtins.input", return_value="y"):
                     rc = run_menu(self.root)
         self.assertEqual(rc, 0)
-        self.assertEqual(
-            (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n"
-        )
+        self.assertEqual((self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n")
 
     def test_esc_on_producer_picker_cancels_menu_before_docker(self) -> None:
         self.write_pair()
@@ -266,8 +277,12 @@ class MenuTests(unittest.TestCase):
     def test_switch_asks_to_write_like_a_direct_pick(self) -> None:
         self.write_job("a-producer", produces={"orders": ["consumer"]})
         self.write_job("consumer", requires=["orders"])
-        self.write_job("producer", forward=["BASE_URL"],
-                            produces={"orders": ["consumer"]}, recommended=["orders"])
+        self.write_job(
+            "producer",
+            forward=["BASE_URL"],
+            produces={"orders": ["consumer"]},
+            recommended=["orders"],
+        )
         output = io.StringIO()
         with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT": "[DATA orders] 1"}):
             # top-level, job (consumer=1), producer picker (producer=1), base URL (0)
@@ -283,9 +298,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn('Write "orders" data for consumer?', prompt.call_args_list[0].args[0])
         [call] = self.fake_docker_calls()
         self.assertIn("/scripts/producer.js", call)
-        self.assertEqual(
-            (self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n"
-        )
+        self.assertEqual((self.root / "data" / "orders.csv").read_text(encoding="utf-8"), "id\n1\n")
         text = output.getvalue()
         self.assertNotIn("[punch] writing", text)
         self.assertIn("[punch] orders ready; run consumer next.", text)
@@ -729,17 +742,20 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertRunsWithConfig(call, preset)
 
-
     SIZED_PRODUCER = {"iterationSeconds": 1, "maxSeconds": 270}
 
     def write_sized_pair(self, *, presets: bool = True) -> None:
         self.write_job(
-            "producer", forward=["BASE_URL"],
-            produces={"orders": ["consumer"]}, sizing=self.SIZED_PRODUCER,
+            "producer",
+            forward=["BASE_URL"],
+            produces={"orders": ["consumer"]},
+            sizing=self.SIZED_PRODUCER,
         )
         self.write_job(
-            "consumer", forward=["BASE_URL"],
-            requires=["orders"], sizing={"margin": 0.15},
+            "consumer",
+            forward=["BASE_URL"],
+            requires=["orders"],
+            sizing={"margin": 0.15},
         )
         if presets:
             self.write_options("5-iterations", ITERATIONS_5)
@@ -781,8 +797,10 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(calls[3][1]["title"], "Load options:")
         self.assertEqual(
             calls[4][0],
-            ["5-iterations",
-             "5-vu-5m  (not estimable: consumer declares no sizing.iterationSeconds)"],
+            [
+                "5-iterations",
+                "5-vu-5m  (not estimable: consumer declares no sizing.iterationSeconds)",
+            ],
         )
         self.assertEqual(calls[4][1]["title"], "Load options for consumer:")
         self.assertEqual(calls[4][1]["cursor_index"], 0)
@@ -808,8 +826,11 @@ class MenuTests(unittest.TestCase):
     def test_target_preset_cursor_starts_on_the_target_config(self) -> None:
         self.write_sized_pair()
         self.write_job(
-            "consumer", forward=["BASE_URL"], requires=["orders"],
-            sizing={"iterationSeconds": 2, "margin": 0.15}, config="options/5-vu-5m.json",
+            "consumer",
+            forward=["BASE_URL"],
+            requires=["orders"],
+            sizing={"iterationSeconds": 2, "margin": 0.15},
+            config="options/5-vu-5m.json",
         )
         rc, calls, _, _ = self.run_sized(0, 1, 0, 1, 1, rows=863)
         self.assertEqual(rc, 0)
@@ -846,9 +867,7 @@ class MenuTests(unittest.TestCase):
         # mode (usual=0), options preset picker ("5-iterations" = 1 after the default)
         rc, calls, text, prompt = self.run_sized(0, 1, 0, 0, 1)
         self.assertEqual(rc, 0)
-        self.assertEqual(
-            calls[4][0], ["Job default (script options)", "5-iterations", "5-vu-5m"]
-        )
+        self.assertEqual(calls[4][0], ["Job default (script options)", "5-iterations", "5-vu-5m"])
         self.assertIn('Write "orders" data for consumer?', prompt.call_args_list[0].args[0])
         [call] = self.fake_docker_calls()
         self.assertRunsWithConfig(call, self.root_options_dir() / "5-iterations.json")
@@ -877,12 +896,16 @@ class MenuTests(unittest.TestCase):
     def test_target_picker_lists_each_sized_target(self) -> None:
         self.write_sized_pair()
         self.write_job(
-            "producer", forward=["BASE_URL"],
-            produces={"orders": ["consumer", "other"]}, sizing=self.SIZED_PRODUCER,
+            "producer",
+            forward=["BASE_URL"],
+            produces={"orders": ["consumer", "other"]},
+            sizing=self.SIZED_PRODUCER,
         )
         self.write_job(
-            "other", forward=["BASE_URL"],
-            requires=["orders"], sizing={},
+            "other",
+            forward=["BASE_URL"],
+            requires=["orders"],
+            sizing={},
         )
         # jobs sorted: consumer, other, producer=2; target picker other=1
         rc, calls, text, _ = self.run_sized(0, 2, 0, 1, 1, 0, rows=5)

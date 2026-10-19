@@ -131,9 +131,7 @@ def resolve_data_overrides(job: K6Job, raw: Sequence[str]) -> dict[str, Path]:
     return overrides
 
 
-def required_data_paths(
-    job: K6Job, overrides: Mapping[str, Path]
-) -> dict[str, Path]:
+def required_data_paths(job: K6Job, overrides: Mapping[str, Path]) -> dict[str, Path]:
     if job.data is None:
         return {}
     return {
@@ -142,9 +140,7 @@ def required_data_paths(
     }
 
 
-def optional_data_paths(
-    job: K6Job, overrides: Mapping[str, Path]
-) -> dict[str, Path]:
+def optional_data_paths(job: K6Job, overrides: Mapping[str, Path]) -> dict[str, Path]:
     if job.data is None:
         return {}
     return {
@@ -236,9 +232,7 @@ def data_environment(
 DEFAULT_DATA = "default"
 
 
-def resolve_data_args(
-    job: K6Job, raw: Sequence[str]
-) -> tuple[dict[str, Path], dict[str, bool]]:
+def resolve_data_args(job: K6Job, raw: Sequence[str]) -> tuple[dict[str, Path], dict[str, bool]]:
     """Split `--data` into path overrides and `<dataset>=default` choices."""
     paths: list[str] = []
     choices: dict[str, bool] = {}
@@ -501,9 +495,7 @@ def execute_job(
         opted = validate_produce(job, produce)
     except ValueError as error:
         return fail_before_start(str(error))
-    preflight_failure = preflight_requirements(
-        job, overrides, producers_of, optional_choices
-    )
+    preflight_failure = preflight_requirements(job, overrides, producers_of, optional_choices)
     if preflight_failure is not None:
         return fail_before_start(preflight_failure)
     if not docker_run_confirmed:
@@ -519,9 +511,7 @@ def execute_job(
     output = stdout if stdout is not None else sys.stdout
     errors = stderr if stderr is not None else sys.stderr
     for dataset in absent_optional_datasets(job, overrides, optional_choices):
-        output.write(
-            f'[punch] optional dataset "{dataset}" not used — scenario uses its default\n'
-        )
+        output.write(f'[punch] optional dataset "{dataset}" not used — scenario uses its default\n')
     sinks: dict[str, _DatasetSink] = {}
     log_file: IO[str] | None = None
     proc: subprocess.Popen[str] | None = None

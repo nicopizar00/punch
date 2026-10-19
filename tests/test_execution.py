@@ -179,9 +179,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(leftovers, [])
 
     def test_opted_in_dataset_is_published_with_header(self) -> None:
-        result = self.run_producer(
-            ["noise", "[DATA carts] c1,p1,s1", '[DATA carts] c2,"p, 2",s2']
-        )
+        result = self.run_producer(["noise", "[DATA carts] c1,p1,s1", '[DATA carts] c2,"p, 2",s2'])
         self.assertTrue(result.passed, result.failure)
         self.assertEqual(
             self.carts_path.read_text(encoding="utf-8"),
@@ -254,14 +252,18 @@ class ExecutionTests(unittest.TestCase):
             "FAKE_STDERR": "[DATA carts] e,e,e",
         }
         result = execute_job(
-            self.job, environment=env, produce=("carts",),
-            stdout=io.StringIO(), stderr=io.StringIO(),
+            self.job,
+            environment=env,
+            produce=("carts",),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
         )
         self.assertTrue(result.passed, result.failure)
         self.assertNotIn("e,e,e", self.carts_path.read_text(encoding="utf-8"))
 
     def test_validate_produce_expands_all_and_rejects_unknown(self) -> None:
         from punch.execution import validate_produce
+
         self.assertEqual(validate_produce(self.job, ["all"]), ("carts",))
         self.assertEqual(validate_produce(self.job, []), ())
         self.assertEqual(validate_produce(self.job, ["carts", "carts"]), ("carts",))
@@ -345,7 +347,9 @@ class ExecutionTests(unittest.TestCase):
 
     def test_missing_required_file_is_reported_even_when_docker_is_declined(self) -> None:
         result = execute_job(
-            self.consumer, environment=self.env, docker_run_confirmed=False,
+            self.consumer,
+            environment=self.env,
+            docker_run_confirmed=False,
             producers_of=lambda dataset: ("data-producer",),
         )
         self.assertIn('requires "carts"', result.failure)
@@ -367,6 +371,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_data_override_points_at_alternate_file(self) -> None:
         from punch.execution import resolve_data_overrides
+
         alt = self.root / "data" / "batch-2.csv"
         alt.parent.mkdir(parents=True, exist_ok=True)
         alt.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
@@ -381,6 +386,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_data_override_outside_directory_is_rejected(self) -> None:
         from punch.execution import resolve_data_overrides
+
         for raw in ("carts=../x.csv", "carts=/tmp/x.csv", "carts=reports/x.csv", "carts=data"):
             with self.subTest(raw=raw):
                 with self.assertRaisesRegex(ValueError, "must be beneath spec.data.directory"):
@@ -388,6 +394,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_data_override_rejects_unknown_dataset_and_bad_syntax(self) -> None:
         from punch.execution import resolve_data_overrides
+
         with self.assertRaisesRegex(ValueError, 'data-consumer does not require "orders"'):
             resolve_data_overrides(self.consumer, ["orders=data/o.csv"])
         with self.assertRaisesRegex(ValueError, "expected <dataset>=<path>"):
@@ -409,9 +416,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertTrue(result.passed, result.failure)
         args = self.args_path.read_text(encoding="utf-8").splitlines()
         self.assertFalse(any(a.startswith("DATA_CARTS_CSV=") for a in args))
-        self.assertIn(
-            '[punch] optional dataset "carts" not used — scenario uses its default', out
-        )
+        self.assertIn('[punch] optional dataset "carts" not used — scenario uses its default', out)
 
     def test_optional_header_only_is_absent(self) -> None:
         self.write_carts("cartId,productId,sid\n\n")
@@ -433,6 +438,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_optional_override_is_accepted_and_empty_override_is_absent(self) -> None:
         from punch.execution import resolve_data_overrides
+
         alt = self.root / "data" / "alt.csv"
         alt.parent.mkdir(parents=True, exist_ok=True)
         alt.write_text("cartId,productId,sid\nc,p,s\n", encoding="utf-8")
@@ -450,6 +456,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_used_data_paths_covers_required_and_present_optional(self) -> None:
         from punch.execution import used_data_paths
+
         self.assertEqual(used_data_paths(self.optional_consumer, {}), {})
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         self.assertEqual(used_data_paths(self.optional_consumer, {}), {"carts": self.carts_path})
@@ -495,6 +502,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_missing_datasets_follow_optional_choices(self) -> None:
         from punch.execution import missing_datasets
+
         self.assertEqual(missing_datasets(self.consumer, {}), ("carts",))
         self.assertEqual(missing_datasets(self.optional_consumer, {}), ())
         self.assertEqual(missing_datasets(self.optional_consumer, {}, {"carts": True}), ("carts",))
@@ -505,12 +513,14 @@ class ExecutionTests(unittest.TestCase):
 
     def test_data_row_count(self) -> None:
         from punch.execution import data_row_count
+
         self.assertEqual(data_row_count(self.carts_path), 0)
         self.write_carts("cartId,productId,sid\nc,p,s\n\nd,q,t\n")
         self.assertEqual(data_row_count(self.carts_path), 2)
 
     def test_resolve_data_args_splits_default_from_paths(self) -> None:
         from punch.execution import resolve_data_args
+
         overrides, choices = resolve_data_args(self.optional_consumer, ["carts=default"])
         self.assertEqual((overrides, choices), ({}, {"carts": False}))
         overrides, choices = resolve_data_args(self.optional_consumer, ["carts=data/alt.csv"])
@@ -519,7 +529,11 @@ class ExecutionTests(unittest.TestCase):
 
     def test_resolve_data_args_rejects_default_and_path_for_one_dataset(self) -> None:
         from punch.execution import resolve_data_args
-        for raw in (["carts=default", "carts=data/alt.csv"], ["carts=data/alt.csv", "carts=default"]):
+
+        for raw in (
+            ["carts=default", "carts=data/alt.csv"],
+            ["carts=data/alt.csv", "carts=default"],
+        ):
             with self.assertRaisesRegex(
                 ValueError, '--data carts: both "default" and a path given'
             ):
@@ -527,6 +541,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_resolve_data_args_rejects_default_for_required(self) -> None:
         from punch.execution import resolve_data_args
+
         with self.assertRaisesRegex(
             ValueError, '--data carts=default: "carts" is not an optional dataset of data-consumer'
         ):
@@ -534,6 +549,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_data_sources_name_default_or_relative_path(self) -> None:
         from punch.execution import data_sources
+
         self.assertEqual(data_sources(self.optional_consumer, {}), {"carts": "default"})
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         self.assertEqual(data_sources(self.optional_consumer, {}), {"carts": "data/carts.csv"})
@@ -545,6 +561,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_delete_prompt_is_skipped_without_a_tty(self) -> None:
         from punch.execution import confirm_delete_consumed
+
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         out = io.StringIO()
         deleted = confirm_delete_consumed(
@@ -556,15 +573,19 @@ class ExecutionTests(unittest.TestCase):
 
     def test_delete_prompt_yes_deletes_on_tty(self) -> None:
         from punch.execution import confirm_delete_consumed
+
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         out = io.StringIO()
-        deleted = confirm_delete_consumed({"carts": self.carts_path}, stdin=TtyInput("y\n"), stdout=out)
+        deleted = confirm_delete_consumed(
+            {"carts": self.carts_path}, stdin=TtyInput("y\n"), stdout=out
+        )
         self.assertEqual(deleted, [self.carts_path])
         self.assertFalse(self.carts_path.exists())
         self.assertIn('Delete consumed "carts" data', out.getvalue())
 
     def test_delete_prompt_default_keeps_file(self) -> None:
         from punch.execution import confirm_delete_consumed
+
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         deleted = confirm_delete_consumed(
             {"carts": self.carts_path}, stdin=TtyInput("\n"), stdout=io.StringIO()
@@ -586,8 +607,11 @@ class ExecutionTests(unittest.TestCase):
         self.write_previous_carts()
         env = {**self.env, "FAKE_STDOUT": "[DATA orders] ord_1"}
         result = execute_job(
-            job, environment=env, produce=("carts",),
-            stdout=io.StringIO(), stderr=io.StringIO(),
+            job,
+            environment=env,
+            produce=("carts",),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
         )
         self.assertFalse(result.passed)
         self.assertIn("no [DATA carts] records were produced", result.failure)
@@ -598,8 +622,11 @@ class ExecutionTests(unittest.TestCase):
         job = self.two_dataset_producer()
         env = {**self.env, "FAKE_STDOUT": "[DATA orders] ord_1"}
         result = execute_job(
-            job, environment=env, produce=("all",),
-            stdout=io.StringIO(), stderr=io.StringIO(),
+            job,
+            environment=env,
+            produce=("all",),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
         )
         self.assertFalse(result.passed)
         self.assertFalse(self.carts_path.exists())
@@ -609,8 +636,11 @@ class ExecutionTests(unittest.TestCase):
         job = self.two_dataset_producer()
         env = {**self.env, "FAKE_STDOUT": "[DATA carts] c,p,s|[DATA orders] ord_1"}
         result = execute_job(
-            job, environment=env, produce=("all",),
-            stdout=io.StringIO(), stderr=io.StringIO(),
+            job,
+            environment=env,
+            produce=("all",),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
         )
         self.assertTrue(result.passed, result.failure)
         self.assertEqual(
@@ -835,16 +865,12 @@ time.sleep(30)
     def test_executes_one_explicit_compose_run_with_present_allowlisted_environment(self) -> None:
         self.env.pop("BASE_URL")
         self.env["SECRET"] = "ignored"
-        result = execute_job(
-            self.no_csv_job, environment=self.env
-        )
+        result = execute_job(self.no_csv_job, environment=self.env)
         arguments = self.args_path.read_text(encoding="utf-8").splitlines()
         forwarded = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-e"]
         name_index = arguments.index("--name")
         self.assertRegex(arguments[name_index + 1], r"^punch-\d+-[0-9a-f]{12}$")
-        arguments_without_internal_name = (
-            arguments[:name_index] + arguments[name_index + 2 :]
-        )
+        arguments_without_internal_name = arguments[:name_index] + arguments[name_index + 2 :]
         self.assertTrue(result.passed)
         self.assertEqual(arguments.count("compose"), 1)
         self.assertEqual(arguments.count("run"), 2)
@@ -878,9 +904,7 @@ time.sleep(30)
     def test_closes_child_streams_after_streaming(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ResourceWarning)
-            result = execute_job(
-                self.no_csv_job, environment=self.env
-            )
+            result = execute_job(self.no_csv_job, environment=self.env)
         self.assertTrue(result.passed)
         self.assertEqual(
             [warning for warning in caught if issubclass(warning.category, ResourceWarning)], []

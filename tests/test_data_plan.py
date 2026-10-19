@@ -90,8 +90,12 @@ class PlanDataTests(unittest.TestCase):
     def plan(self, name, chooser, overrides=None, choices=None, environment=ENV):
         catalog = load_catalog(self.root)
         return plan_data(
-            catalog.jobs[name], catalog, overrides or {}, choices or {},
-            choose=chooser, environment=environment,
+            catalog.jobs[name],
+            catalog,
+            overrides or {},
+            choices or {},
+            choose=chooser,
+            environment=environment,
         )
 
     # --- required data ---------------------------------------------------
@@ -168,8 +172,9 @@ class PlanDataTests(unittest.TestCase):
     def test_cycle_stops(self) -> None:
         self.add_second_hop()
         self.edit("data-output.yaml", "    produces:", "    requires: [orders]\n    produces:")
-        self.edit("data-input.yaml", "targets: [data-status]",
-                  "targets: [data-status, data-producer]")
+        self.edit(
+            "data-input.yaml", "targets: [data-status]", "targets: [data-status, data-producer]"
+        )
         chooser = ScriptedChooser("data-consumer", "data-producer", "data-consumer")
         stop = self.plan("data-status", chooser)
         self.assertEqual(
@@ -279,15 +284,19 @@ class PlanDataTests(unittest.TestCase):
     def test_switch_hint_names_origin_and_what_it_still_misses(self) -> None:
         self.add_second_hop()
         catalog = load_catalog(self.root)
-        plan = DataPlan(catalog.jobs["data-producer"], produce=("carts",),
-                        switched_from=("data-status", "data-consumer"))
+        plan = DataPlan(
+            catalog.jobs["data-producer"],
+            produce=("carts",),
+            switched_from=("data-status", "data-consumer"),
+        )
         self.write_carts("cartId,productId,sid\nc,p,s\n")
         self.assertEqual(
             switch_hint(plan, catalog),
             "[punch] carts ready; run data-status next (still missing: orders).",
         )
-        plan = DataPlan(catalog.jobs["data-producer"], produce=("carts",),
-                        switched_from=("data-consumer",))
+        plan = DataPlan(
+            catalog.jobs["data-producer"], produce=("carts",), switched_from=("data-consumer",)
+        )
         self.assertEqual(switch_hint(plan, catalog), "[punch] carts ready; run data-consumer next.")
 
 

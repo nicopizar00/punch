@@ -36,8 +36,9 @@ class CatalogTests(unittest.TestCase):
         text = text.replace("name: data-producer", f"name: {name}")
         if recommended:
             self.assertIn("targets: [data-consumer]", text)
-            text = text.replace("targets: [data-consumer]",
-                                "targets: [data-consumer]\n        recommended: true")
+            text = text.replace(
+                "targets: [data-consumer]", "targets: [data-consumer]\n        recommended: true"
+            )
         (self.root / f"{name}.yaml").write_text(text, encoding="utf-8")
 
     def test_links_producers_and_consumers(self) -> None:
@@ -69,7 +70,9 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(catalog.consumers_of("carts"), ("data-consumer",))
 
     def test_optional_dataset_without_producer_is_allowed(self) -> None:
-        self.edit("data-input.yaml", "requires: [carts]", "requires: [carts]\n    optional: [extras]")
+        self.edit(
+            "data-input.yaml", "requires: [carts]", "requires: [carts]\n    optional: [extras]"
+        )
         catalog = load_catalog(self.root)
         self.assertEqual(catalog.producers_of("extras"), ())
 

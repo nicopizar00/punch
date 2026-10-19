@@ -116,9 +116,7 @@ def _job_menu_rows(paths: List[Path]) -> tuple[List[str], str]:
         try:
             job = load_job(path)
         except JobError as error:
-            records.append(
-                (_single_line(path.stem), _single_line(f"invalid: {error}"), "—", "—")
-            )
+            records.append((_single_line(path.stem), _single_line(f"invalid: {error}"), "—", "—"))
             continue
         records.append(
             (
@@ -135,14 +133,10 @@ def _job_menu_rows(paths: List[Path]) -> tuple[List[str], str]:
     ]
     separator = " │ "
     separator_width = cell_len(separator) * (len(headers) - 1)
-    available_width = max(
-        len(headers), _terminal_columns() - cell_len("> ") - separator_width
-    )
+    available_width = max(len(headers), _terminal_columns() - cell_len("> ") - separator_width)
     preferred_widths = [desired_widths[0], *(cell_len(header) for header in headers[1:])]
     widths = (
-        preferred_widths.copy()
-        if sum(preferred_widths) <= available_width
-        else [1] * len(headers)
+        preferred_widths.copy() if sum(preferred_widths) <= available_width else [1] * len(headers)
     )
     remaining_width = available_width - sum(widths)
 
@@ -162,9 +156,7 @@ def _job_menu_rows(paths: List[Path]) -> tuple[List[str], str]:
         cells = []
         for value, width in zip(values, widths):
             if cell_len(value) > width:
-                value = (
-                    "…" if width == 1 else set_cell_size(value, width - 1).rstrip() + "…"
-                )
+                value = "…" if width == 1 else set_cell_size(value, width - 1).rstrip() + "…"
             cells.append(set_cell_size(value, width))
         return separator.join(cells)
 
@@ -249,16 +241,12 @@ def _choose_options(job: K6Job, options_dir: Path) -> Optional[Path]:
     return path
 
 
-def _choose_target_preset(
-    job: K6Job, target: str, catalog, paths: List[Path]
-) -> SizingPlan:
+def _choose_target_preset(job: K6Job, target: str, catalog, paths: List[Path]) -> SizingPlan:
     entries: List[str] = []
     plans: List[Optional[SizingPlan]] = []
     for path in paths:
         try:
-            plan = size_producer(
-                job, target, catalog, read_k6_config(path), preset=path.stem
-            )
+            plan = size_producer(job, target, catalog, read_k6_config(path), preset=path.stem)
         except (SizingError, JobError) as error:
             entries.append(f"{path.stem}  (not estimable: {error})")
             plans.append(None)
@@ -267,9 +255,7 @@ def _choose_target_preset(
             plans.append(plan)
     # The cursor starts on the target's own default config when it is a preset.
     target_config = catalog.jobs[target].k6_config
-    cursor = next(
-        (index for index, path in enumerate(paths) if path.resolve() == target_config), 0
-    )
+    cursor = next((index for index, path in enumerate(paths) if path.resolve() == target_config), 0)
     while True:
         cursor = _select(entries, f"Load options for {target}:", cursor_index=cursor)
         plan = plans[cursor]
@@ -388,9 +374,7 @@ def run_menu(
         return 130
 
 
-def _run_job_menu(
-    jobs_dir: Path, options_dir: Optional[Path], state_dir: Path
-) -> int:
+def _run_job_menu(jobs_dir: Path, options_dir: Optional[Path], state_dir: Path) -> int:
     resolved_options_dir = options_dir if options_dir is not None else jobs_dir.parent / "options"
     paths = discover_jobs(jobs_dir)
     if not paths:

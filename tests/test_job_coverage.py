@@ -15,7 +15,9 @@ from punch.job import load_job
 class JobCoverageTests(unittest.TestCase):
     def test_bundled_jobs_match_the_typescript_build_entries(self) -> None:
         repository = Path(__file__).resolve().parents[1]
-        build_command = json.loads((repository / "package.json").read_text(encoding="utf-8"))["scripts"]["build"]
+        build_command = json.loads((repository / "package.json").read_text(encoding="utf-8"))[
+            "scripts"
+        ]["build"]
         tokens = shlex.split(build_command)
         built_scripts = [
             f"/scripts/{Path(token).stem}.js"

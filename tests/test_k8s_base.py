@@ -89,8 +89,12 @@ class PunchK6RunTemplateTests(unittest.TestCase):
             self.assertEqual(template["container"]["command"], ["sh", "/punch/bin/k6-run.sh"])
             mounts = {m["mountPath"]: m["name"] for m in template["container"]["volumeMounts"]}
             volumes = {v["name"]: v for v in template["volumes"]}
-            self.assertEqual(volumes[mounts["/punch/bin"]]["configMap"]["name"], "punch-k6-run-script")
-            self.assertEqual(volumes[mounts["/punch/options"]]["configMap"]["name"], "punch-k6-options")
+            self.assertEqual(
+                volumes[mounts["/punch/bin"]]["configMap"]["name"], "punch-k6-run-script"
+            )
+            self.assertEqual(
+                volumes[mounts["/punch/options"]]["configMap"]["name"], "punch-k6-options"
+            )
             self.assertIn("emptyDir", volumes[mounts["/punch/out"]])
             self.assertIn("emptyDir", volumes[mounts["/scripts/reports"]])
 
@@ -98,7 +102,9 @@ class PunchK6RunTemplateTests(unittest.TestCase):
         browser = _templates()["k6-browser"]
         mounts = {m["mountPath"]: m["name"] for m in browser["container"]["volumeMounts"]}
         volumes = {v["name"]: v for v in browser["volumes"]}
-        self.assertEqual(volumes[mounts["/dev/shm"]]["emptyDir"], {"medium": "Memory", "sizeLimit": "512Mi"})
+        self.assertEqual(
+            volumes[mounts["/dev/shm"]]["emptyDir"], {"medium": "Memory", "sizeLimit": "512Mi"}
+        )
         k6_mounts = {m["mountPath"] for m in _templates()["k6"]["container"]["volumeMounts"]}
         self.assertNotIn("/dev/shm", k6_mounts)
 
@@ -133,20 +139,29 @@ class KustomizeWiringTests(unittest.TestCase):
         [kustomization] = _documents("kustomization.yaml")
         self.assertEqual(kustomization["resources"], ["rbac.yaml", "punch-k6-run.yaml"])
         [generator] = kustomization["configMapGenerator"]
-        self.assertEqual((generator["name"], generator["files"]), ("punch-k6-run-script", ["k6-run.sh"]))
+        self.assertEqual(
+            (generator["name"], generator["files"]), ("punch-k6-run-script", ["k6-run.sh"])
+        )
         self.assertTrue(kustomization["generatorOptions"]["disableNameSuffixHash"])
 
     def test_images_fieldspec_reaches_workflow_template_containers(self) -> None:
         [config] = _documents("kustomizeconfig.yaml")
         self.assertEqual(
-            config["images"], [{"path": "spec/templates[]/container/image", "kind": "WorkflowTemplate"}]
+            config["images"],
+            [{"path": "spec/templates[]/container/image", "kind": "WorkflowTemplate"}],
         )
 
     def test_executor_role_allows_task_results_only(self) -> None:
         role = next(d for d in _documents("rbac.yaml") if d["kind"] == "Role")
         self.assertEqual(
             role["rules"],
-            [{"apiGroups": ["argoproj.io"], "resources": ["workflowtaskresults"], "verbs": ["create", "patch"]}],
+            [
+                {
+                    "apiGroups": ["argoproj.io"],
+                    "resources": ["workflowtaskresults"],
+                    "verbs": ["create", "patch"],
+                }
+            ],
         )
 
 

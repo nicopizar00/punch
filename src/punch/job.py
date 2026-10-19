@@ -187,9 +187,7 @@ def _environment_names(value: Any, field: str) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _unique_names(
-    value: Any, field: str, pattern: re.Pattern[str], kind: str
-) -> tuple[str, ...]:
+def _unique_names(value: Any, field: str, pattern: re.Pattern[str], kind: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not value:
         raise JobError(f"{field} must be a non-empty list")
     names: list[str] = []
@@ -250,7 +248,10 @@ def _data_spec(value: Any, working_directory: Path) -> DataSpec:
             DataProduct(
                 dataset=dataset,
                 columns=_unique_names(
-                    _required(product, "columns", field), f"{field}.columns", COLUMN_PATTERN, "column"
+                    _required(product, "columns", field),
+                    f"{field}.columns",
+                    COLUMN_PATTERN,
+                    "column",
                 ),
                 targets=_unique_names(
                     _required(product, "targets", field), f"{field}.targets", NAME_PATTERN, "target"
@@ -313,7 +314,9 @@ def load_job(path: Path) -> K6Job:
     if not NAME_PATTERN.fullmatch(name):
         raise JobError(f"metadata.name must match {NAME_PATTERN.pattern}")
     description = (
-        _string(metadata["description"], "metadata.description") if "description" in metadata else ""
+        _string(metadata["description"], "metadata.description")
+        if "description" in metadata
+        else ""
     )
 
     spec = _allowed_keys(_required(root, "spec", "root"), SPEC_KEYS, "spec")
@@ -332,9 +335,7 @@ def load_job(path: Path) -> K6Job:
     )
     if not compose_file.is_file():
         raise JobError("compose file does not exist")
-    compose_service = _string(
-        _required(compose, "service", "spec.compose"), "spec.compose.service"
-    )
+    compose_service = _string(_required(compose, "service", "spec.compose"), "spec.compose.service")
 
     k6 = _allowed_keys(_required(spec, "k6", "spec"), K6_KEYS, "spec.k6")
     k6_script = _string(_required(k6, "script", "spec.k6"), "spec.k6.script")
@@ -351,7 +352,9 @@ def load_job(path: Path) -> K6Job:
 
     environment = _allowed_keys(spec.get("environment", {}), ENVIRONMENT_KEYS, "environment")
     forward_environment = _environment_names(environment.get("forward", []), "environment.forward")
-    required_environment = _environment_names(environment.get("required", []), "environment.required")
+    required_environment = _environment_names(
+        environment.get("required", []), "environment.required"
+    )
     if not set(required_environment).issubset(forward_environment):
         raise JobError("environment.required must also appear in environment.forward")
 

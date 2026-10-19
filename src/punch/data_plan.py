@@ -82,14 +82,16 @@ def _choose_sources(
         if not rows and not catalog.producers_of(dataset):
             choices[dataset] = False  # only the default is available
             continue
-        index = choose(Choice(
-            title=f'"{job.name}" can read "{dataset}" — pick a source (Esc cancels)',
-            options=(
-                DEFAULT_SOURCE,
-                f"{_relative(job, path)} "
-                f"({(f'{rows} row' if rows == 1 else f'{rows} rows') if rows else 'no rows'})",
-            ),
-        ))
+        index = choose(
+            Choice(
+                title=f'"{job.name}" can read "{dataset}" — pick a source (Esc cancels)',
+                options=(
+                    DEFAULT_SOURCE,
+                    f"{_relative(job, path)} "
+                    f"({(f'{rows} row' if rows == 1 else f'{rows} rows') if rows else 'no rows'})",
+                ),
+            )
+        )
         if index is None:
             return None
         choices[dataset] = index == 1
@@ -101,7 +103,8 @@ def _producer_option(
 ) -> str:
     tags = ["recommended"] if name == recommended else []
     missing_env = [
-        variable for variable in catalog.jobs[name].required_environment
+        variable
+        for variable in catalog.jobs[name].required_environment
         if not environment.get(variable)
     ]
     if missing_env:
@@ -137,13 +140,15 @@ def plan_data(
         if not producers:
             return PlanStop(f"{need} and no job produces it")
         recommended = catalog.recommended_producer(dataset)
-        index = choose(Choice(
-            title=f"{need}. Run a producer instead? (Esc cancels)",
-            options=tuple(
-                _producer_option(name, recommended, catalog, environment) for name in producers
-            ),
-            cursor=producers.index(recommended) if recommended else 0,
-        ))
+        index = choose(
+            Choice(
+                title=f"{need}. Run a producer instead? (Esc cancels)",
+                options=tuple(
+                    _producer_option(name, recommended, catalog, environment) for name in producers
+                ),
+                cursor=producers.index(recommended) if recommended else 0,
+            )
+        )
         if index is None:
             return PlanStop(
                 f"{CANCELED}; {need} — produce it with: {', '.join(producers)} "

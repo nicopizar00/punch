@@ -31,7 +31,10 @@ ESTIMABLE_EXECUTORS = ("shared-iterations", "per-vu-iterations", "constant-vus")
 _DURATION = re.compile(r"(?:\d+(?:\.\d+)?(?:ms|s|m|h))+")
 _DURATION_GROUP = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h)")
 _UNIT_SECONDS = {
-    "ms": Fraction(1, 1000), "s": Fraction(1), "m": Fraction(60), "h": Fraction(3600),
+    "ms": Fraction(1, 1000),
+    "s": Fraction(1),
+    "m": Fraction(60),
+    "h": Fraction(3600),
 }
 
 

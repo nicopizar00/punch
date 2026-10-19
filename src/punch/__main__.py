@@ -92,10 +92,16 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         try:
             out = subprocess.run(
                 [docker, "compose", "version"],
-                capture_output=True, text=True, check=False,
+                capture_output=True,
+                text=True,
+                check=False,
             )
             compose_ok = out.returncode == 0
-            compose_version = (out.stdout or out.stderr).strip().splitlines()[0] if out.stdout or out.stderr else ""
+            compose_version = (
+                (out.stdout or out.stderr).strip().splitlines()[0]
+                if out.stdout or out.stderr
+                else ""
+            )
         except OSError as e:
             compose_version = str(e)
     checks.append(("docker compose available", compose_ok, compose_version))
@@ -108,6 +114,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     try:
         import yaml
+
         yaml_ok = True
         yaml_detail = getattr(yaml, "__version__", "available")
     except ModuleNotFoundError:
@@ -120,6 +127,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     if yaml_ok:
         try:
             from punch.job import JobError, load_job
+
             for path in BUNDLED_JOBS.values():
                 load_job(path)
             job_ok = True
@@ -166,7 +174,10 @@ def _collect_service_logs() -> None:
             with log.open("w", encoding="utf-8") as fh:
                 subprocess.run(
                     ["docker", "compose", "logs", svc],
-                    cwd=REPO_ROOT, stdout=fh, stderr=subprocess.STDOUT, check=False,
+                    cwd=REPO_ROOT,
+                    stdout=fh,
+                    stderr=subprocess.STDOUT,
+                    check=False,
                 )
         except OSError as e:
             print(f"[punch] could not collect logs for {svc}: {e}", flush=True)
@@ -175,9 +186,11 @@ def _collect_service_logs() -> None:
 def _load_selected_jobs(selector: str):
     from punch.job import JobError, load_job
 
-    paths = list(BUNDLED_JOBS.values()) if selector == "all" else [
-        BUNDLED_JOBS.get(selector, Path(selector))
-    ]
+    paths = (
+        list(BUNDLED_JOBS.values())
+        if selector == "all"
+        else [BUNDLED_JOBS.get(selector, Path(selector))]
+    )
     jobs = []
     for path in paths:
         if not path.is_file():
@@ -261,8 +274,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     started = datetime.now(timezone.utc).isoformat()
     t0 = time.monotonic()
     if args.selector == "all" and (args.produce or args.data or args.size_for):
-        print("[punch] --produce, --data, and --size-for apply to one selected job, not 'all'",
-              file=sys.stderr, flush=True)
+        print(
+            "[punch] --produce, --data, and --size-for apply to one selected job, not 'all'",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
     config_path = Path(args.config).resolve() if args.config else None
     try:
@@ -280,11 +296,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         if args.selector == "all" and missing:
             failure = f"missing required environment: {', '.join(missing)}"
             print(f"[punch] SKIP {job.name}: {failure}", flush=True)
-            results.append(_evidence_result(
-                job,
-                ExecutionResult(job.name, (), None, True, failure),
-                skipped=True,
-            ))
+            results.append(
+                _evidence_result(
+                    job,
+                    ExecutionResult(job.name, (), None, True, failure),
+                    skipped=True,
+                )
+            )
             continue
         runnable.append(job)
 
@@ -292,12 +310,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     size_for: str | None = args.size_for
     plan: DataPlan | None = None
     stopped_rc = 0
-    if (
-        args.selector != "all"
-        and len(runnable) == 1
-        and not args.no_input
-        and sys.stdin.isatty()
-    ):
+    if args.selector != "all" and len(runnable) == 1 and not args.no_input and sys.stdin.isatty():
         from punch.menu import choose
 
         selected = runnable[0]
@@ -321,23 +334,28 @@ def cmd_run(args: argparse.Namespace) -> int:
                 pass
             elif isinstance(outcome, PlanStop):
                 print(f"[punch] {outcome.reason}", file=sys.stderr, flush=True)
-                results.append(_evidence_result(
-                    selected, ExecutionResult(selected.name, (), None, False, outcome.reason)
-                ))
+                results.append(
+                    _evidence_result(
+                        selected, ExecutionResult(selected.name, (), None, False, outcome.reason)
+                    )
+                )
                 runnable, stopped_rc = [], 1
             else:
                 plan = outcome
                 if plan.switched_from:
                     ignored = [
-                        flag for flag, given in (
+                        flag
+                        for flag, given in (
                             ("--produce", produce_args),
                             ("--data", data_args),
                             ("--size-for", size_for),
-                        ) if given
+                        )
+                        if given
                     ]
                     if ignored:
-                        print(f"[punch] ignoring {'/'.join(ignored)} for {selected.name}",
-                              flush=True)
+                        print(
+                            f"[punch] ignoring {'/'.join(ignored)} for {selected.name}", flush=True
+                        )
                     produce_args, data_args, size_for = list(plan.produce), [], None
                     jobs = runnable = [plan.job]
     switched_from = plan.switched_from if plan is not None else ()
@@ -358,10 +376,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
         except (CatalogError, SizingError, JobError) as error:
             print(f"[punch] {error}", file=sys.stderr, flush=True)
-            results.append(_evidence_result(
-                sized_job,
-                ExecutionResult(sized_job.name, (), None, False, str(error)),
-            ))
+            results.append(
+                _evidence_result(
+                    sized_job,
+                    ExecutionResult(sized_job.name, (), None, False, str(error)),
+                )
+            )
             runnable, stopped_rc = [], 1
         else:
             produce_args = list(dict.fromkeys([*produce_args, *sizing_plan.datasets]))
@@ -400,11 +420,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             overrides, preset = resolve_data_args(job, data_args)
         except (CatalogError, ValueError) as error:
             print(f"[punch] {error}", file=sys.stderr, flush=True)
-            results.append(_evidence_result(
-                job,
-                ExecutionResult(job.name, (), None, False, str(error)),
-                switched_from=switched_from,
-            ))
+            results.append(
+                _evidence_result(
+                    job,
+                    ExecutionResult(job.name, (), None, False, str(error)),
+                    switched_from=switched_from,
+                )
+            )
             overall_rc = overall_rc or 1
             if not args.keep_going:
                 break
@@ -433,16 +455,20 @@ def cmd_run(args: argparse.Namespace) -> int:
             config=config,
         )
         produced = {
-            dataset.dataset: dataset.record_count for dataset in result.datasets if dataset.published
+            dataset.dataset: dataset.record_count
+            for dataset in result.datasets
+            if dataset.published
         }
-        results.append(_evidence_result(
-            job,
-            result,
-            switched_from=switched_from,
-            data_sources=data_sources(job, overrides, choices),
-            sizing=sizing_evidence(sizing_plan, produced) if sizing_plan is not None else None,
-            config=config or job.k6_config,
-        ))
+        results.append(
+            _evidence_result(
+                job,
+                result,
+                switched_from=switched_from,
+                data_sources=data_sources(job, overrides, choices),
+                sizing=sizing_evidence(sizing_plan, produced) if sizing_plan is not None else None,
+                config=config or job.k6_config,
+            )
+        )
         if result.passed and switched_from:
             print(switch_hint(plan, catalog), flush=True)
         if result.passed and sizing_plan is not None:
@@ -463,15 +489,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         _collect_service_logs()
 
     overall_rc = overall_rc or stopped_rc
-    _write_evidence({
-        "command": "run",
-        "tests": [job.name for job in jobs],
-        "results": results,
-        "exitCode": overall_rc,
-        "passed": overall_rc == 0,
-        "startedAt": started,
-        "durationSeconds": round(time.monotonic() - t0, 2),
-    })
+    _write_evidence(
+        {
+            "command": "run",
+            "tests": [job.name for job in jobs],
+            "results": results,
+            "exitCode": overall_rc,
+            "passed": overall_rc == 0,
+            "startedAt": started,
+            "durationSeconds": round(time.monotonic() - t0, 2),
+        }
+    )
     return overall_rc
 
 
@@ -497,27 +525,49 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_p = sub.add_parser("run", help="Run a bundled k6 job, all jobs, or a YAML path.")
     run_p.add_argument("selector", help="Bundled job name, 'all', or a job YAML path.")
-    run_p.add_argument("--keep-going", action="store_true",
-                       help="With 'all', continue subsequent tests after a failure.")
-    run_p.add_argument("--collect-logs", action="store_true",
-                       help="After the run, dump service logs to reports/logs/.")
-    run_p.add_argument("--produce", action="append", default=[], metavar="DATASET",
-                       help="Write a declared dataset (repeatable, or 'all'). Without it no data file is written.")
-    run_p.add_argument("--data", action="append", default=[], metavar="DATASET=PATH",
-                       help="Read a dataset from PATH (beneath spec.data.directory), or DATASET=default for an optional dataset's built-in data.")
-    run_p.add_argument("--no-input", action="store_true",
-                       help="Never open the data-source or producer pickers.")
-    run_p.add_argument("--config", metavar="PATH", default=None,
-                       help="k6 options JSON passed as `k6 run --config` "
-                            "(default: the job's spec.k6.config).")
-    run_p.add_argument("--size-for", metavar="TARGET", default=None,
-                       help="Size this producer run for TARGET: rows from TARGET's k6 config "
-                            "(--config, else TARGET's spec.k6.config) plus its margin; "
-                            "implies --produce for the datasets it feeds TARGET.")
-
-    menu_p = sub.add_parser(
-        "menu", help="Interactively pick and run a k6 job from a directory."
+    run_p.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="With 'all', continue subsequent tests after a failure.",
     )
+    run_p.add_argument(
+        "--collect-logs",
+        action="store_true",
+        help="After the run, dump service logs to reports/logs/.",
+    )
+    run_p.add_argument(
+        "--produce",
+        action="append",
+        default=[],
+        metavar="DATASET",
+        help="Write a declared dataset (repeatable, or 'all'). Without it no data file is written.",
+    )
+    run_p.add_argument(
+        "--data",
+        action="append",
+        default=[],
+        metavar="DATASET=PATH",
+        help="Read a dataset from PATH (beneath spec.data.directory), or DATASET=default for an optional dataset's built-in data.",
+    )
+    run_p.add_argument(
+        "--no-input", action="store_true", help="Never open the data-source or producer pickers."
+    )
+    run_p.add_argument(
+        "--config",
+        metavar="PATH",
+        default=None,
+        help="k6 options JSON passed as `k6 run --config` " "(default: the job's spec.k6.config).",
+    )
+    run_p.add_argument(
+        "--size-for",
+        metavar="TARGET",
+        default=None,
+        help="Size this producer run for TARGET: rows from TARGET's k6 config "
+        "(--config, else TARGET's spec.k6.config) plus its margin; "
+        "implies --produce for the datasets it feeds TARGET.",
+    )
+
+    menu_p = sub.add_parser("menu", help="Interactively pick and run a k6 job from a directory.")
     menu_p.add_argument(
         "jobs_dir",
         nargs="?",
