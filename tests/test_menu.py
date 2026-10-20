@@ -49,7 +49,10 @@ arguments = Path(os.environ["FAKE_DOCKER_ARGS"])
 with arguments.open("a", encoding="utf-8") as file:
     file.write(json.dumps(sys.argv[1:]) + "\\n")
 
-for line in os.environ.get("FAKE_DOCKER_STDOUT", "").split("|"):
+by_script = json.loads(os.environ.get("FAKE_DOCKER_STDOUT_BY_SCRIPT", "{}"))
+script = next((argument for argument in sys.argv[1:] if argument in by_script), None)
+stdout = by_script[script] if script else os.environ.get("FAKE_DOCKER_STDOUT", "")
+for line in stdout.split("|"):
     if line:
         print(line, flush=True)
 raise SystemExit(int(os.environ.get("FAKE_DOCKER_EXIT_CODE", "0")))
@@ -568,7 +571,7 @@ class MenuTests(unittest.TestCase):
 
     def test_monitoring_setup_is_a_stub(self) -> None:
         self.write_job("fixture")
-        with self.select_menu(1):
+        with self.select_menu(2):
             rc = run_menu(self.root)
         self.assertEqual(rc, 0)
         self.assertEqual(self.fake_docker_calls(), [])
@@ -915,6 +918,145 @@ class MenuTests(unittest.TestCase):
         [call] = self.fake_docker_calls()
         self.assertSizedRun(call, 5)  # other: margin 0
         self.assertIn("[punch] orders ready (5 rows); run other next with 5-iterations.", text)
+
+    def write_chain(self, *, options: bool = True) -> None:
+        """cart writes carts for orders; orders writes orders for status."""
+        self.write_job("cart", produces={"carts": ["orders"]}, sizing=self.SIZED_PRODUCER)
+        self.write_job(
+            "orders",
+            requires=["carts"],
+            produces={"orders": ["status"]},
+            sizing={**self.SIZED_PRODUCER, "margin": 0.15},
+        )
+        self.write_job("status", forward=["BASE_URL"], requires=["orders"], sizing={"margin": 0.15})
+        if options:
+            self.write_options("5-iterations", ITERATIONS_5)
+            self.write_options("5-vu-5m", CONSTANT_5_VUS_5M)
+
+    def run_workflow_menu(self, *indices: int | None, inputs=("", "y")):
+        output = io.StringIO()
+        by_script = {
+            "/scripts/cart.js": "|".join(f"[DATA carts] {n}" for n in range(1, 8)),
+            "/scripts/orders.js": "|".join(f"[DATA orders] {n}" for n in range(1, 7)),
+        }
+        with patch.dict(os.environ, {"FAKE_DOCKER_STDOUT_BY_SCRIPT": json.dumps(by_script)}):
+            # answers="": every delete prompt reads an empty line (no).
+            with self.record_menus(*indices, answers="") as calls, patch("sys.stdout", output):
+                with patch("builtins.input", side_effect=list(inputs)):
+                    rc = run_menu(
+                        self.root, options_dir=self.root_options_dir(), state_dir=self.state_dir
+                    )
+        return rc, calls, output.getvalue()
+
+    def read_state(self, name: str):
+        return json.loads((self.state_dir / name).read_text(encoding="utf-8"))
+
+    def test_workflow_menu_runs_a_sized_three_step_workflow(self) -> None:
+        self.write_chain()
+        # top-level (Run workflow=1), cart (0), orders (0), status (0), 5-iterations (1)
+        rc, calls, text = self.run_workflow_menu(1, 0, 0, 0, 1)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[0][0], ["Run job", "Run workflow", "Monitoring setup"])
+        self.assertTrue(calls[1][1]["title"].startswith("Step 1:\n"))
+        self.assertEqual(len(calls[1][0]), 1)  # only cart starts a workflow
+        self.assertEqual(calls[2][0], ["orders  reads carts"])
+        self.assertEqual(calls[2][1]["title"], "Step 2, after cart:")
+        self.assertEqual(calls[3][0], ["status  reads orders", "Done (2 steps)"])
+        self.assertEqual(calls[3][1]["title"], "Step 3, after orders:")
+        self.assertEqual(calls[4][0], ["Job default (script options)", "5-iterations", "5-vu-5m"])
+        self.assertEqual(calls[4][1]["title"], "Load options for status (last step):")
+        self.assertIn("[punch] no job reads what status writes; the workflow has 3 steps", text)
+        for line in (
+            "Punch workflow plan",
+            "  step 1  cart    auto: sized for step 2 (7 iterations, 1 VU)  (writes carts)",
+            "  step 2  orders  auto: sized for step 3 (6 iterations, 1 VU)  "
+            "(reads carts from step 1; writes orders)",
+            "  step 3  status  5-iterations  (reads orders from step 2)",
+            f"  BASE_URL  k6: {DEFAULT_BASE_URL}",
+        ):
+            self.assertIn(line, text)
+        cart, orders, status = self.fake_docker_calls()
+        self.assertIn("/scripts/cart.js", cart)
+        self.assertRunsWithConfig(cart, self.state_dir / "k6-config-cart.json")
+        self.assertRunsWithConfig(orders, self.state_dir / "k6-config-orders.json")
+        self.assertRunsWithConfig(status, self.root_options_dir() / "5-iterations.json")
+        self.assertIn(f"BASE_URL={DEFAULT_BASE_URL}", status)
+        self.assertEqual(self.read_state("k6-config-cart.json"), {"vus": 1, "iterations": 7})
+        self.assertEqual(self.read_state("k6-config-orders.json"), {"vus": 1, "iterations": 6})
+        evidence = self.read_state("punch-workflow.json")
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(
+            [step["rows"] for step in evidence["steps"]], [{"carts": 7}, {"orders": 6}, {}]
+        )
+
+    def test_done_ends_the_workflow_after_two_steps(self) -> None:
+        self.write_chain()
+        # top-level (1), cart (0), orders (0), Done (1), 5-iterations (1)
+        rc, calls, text = self.run_workflow_menu(1, 0, 0, 1, 1)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[4][1]["title"], "Load options for orders (last step):")
+        self.assertIn(
+            "  step 1  cart    auto: sized for step 2 (6 iterations, 1 VU)  (writes carts)", text
+        )
+        self.assertEqual(len(self.fake_docker_calls()), 2)
+
+    def test_without_data_sizing_every_step_runs_the_picked_options(self) -> None:
+        self.write_chain()
+        rc, _calls, _text = self.run_workflow_menu(1, 0, 0, 0, 1, inputs=("n", "y"))
+        self.assertEqual(rc, 0)
+        calls = self.fake_docker_calls()
+        self.assertEqual(len(calls), 3)
+        for call in calls:
+            self.assertRunsWithConfig(call, self.root_options_dir() / "5-iterations.json")
+        self.assertFalse((self.state_dir / "k6-config-cart.json").exists())
+
+    def test_without_options_the_last_step_runs_its_job_default(self) -> None:
+        self.write_chain(options=False)
+        # top-level (1), cart (0), orders (0), status (0); no options picker without options
+        rc, calls, text = self.run_workflow_menu(1, 0, 0, 0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 4)
+        self.assertIn("  step 3  status  script options  (reads orders from step 2)", text)
+        # status's script options run 1 iteration: orders ceil(1 x 1.15) = 2, cart 3.
+        self.assertEqual(self.read_state("k6-config-orders.json"), {"vus": 1, "iterations": 2})
+        self.assertEqual(self.read_state("k6-config-cart.json"), {"vus": 1, "iterations": 3})
+        *_, status = self.fake_docker_calls()
+        self.assertNotIn("--config", status)
+
+    def test_declining_the_plan_runs_nothing(self) -> None:
+        self.write_chain()
+        rc, _calls, text = self.run_workflow_menu(1, 0, 0, 0, 1, inputs=("", "n"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.fake_docker_calls(), [])
+        self.assertIn("[punch] workflow not run.", text)
+        self.assertFalse((self.state_dir / "punch-workflow.json").exists())
+
+    def test_esc_on_a_step_picker_cancels_the_menu(self) -> None:
+        self.write_chain()
+        rc, calls, text = self.run_workflow_menu(1, 0, None)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.fake_docker_calls(), [])
+        self.assertIn("[punch] menu canceled.", text)
+
+    def test_a_catalog_without_links_offers_no_workflow(self) -> None:
+        self.write_job("fixture")
+        rc, calls, text = self.run_workflow_menu(1)
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIn(f"[punch] no job in {self.root} writes data another job reads", text)
+
+    def test_interrupt_during_a_workflow_step_exits_130_with_evidence(self) -> None:
+        self.write_chain()
+        with patch("punch.workflow.execute_job", side_effect=KeyboardInterrupt):
+            with patch("sys.stderr", io.StringIO()):
+                rc, _calls, _text = self.run_workflow_menu(1, 0, 0, 0, 1)
+        self.assertEqual(rc, 130)
+        evidence = self.read_state("punch-workflow.json")
+        self.assertEqual(evidence["outcome"], "interrupted")
+        self.assertEqual(
+            [step["status"] for step in evidence["steps"]], ["interrupted", "skipped", "skipped"]
+        )
 
 
 class _SelectedMenu:

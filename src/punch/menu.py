@@ -18,7 +18,7 @@ from typing import List, Optional
 from rich.cells import cell_len, set_cell_size
 from simple_term_menu import TerminalMenu
 
-from punch.catalog import CatalogError, load_catalog
+from punch.catalog import CatalogError, JobCatalog, load_catalog
 from punch.data_plan import Choice, PickerUnavailable, PlanStop, plan_data, switch_hint
 from punch.execution import (
     ExecutionResult,
@@ -42,6 +42,17 @@ from punch.sizing import (
     sizing_pairs,
     summary_lines,
     write_producer_config,
+)
+from punch.workflow import (
+    AUTO,
+    Load,
+    WorkflowPlan,
+    data_label,
+    first_jobs,
+    next_jobs,
+    plan_workflow,
+    run_workflow,
+    step_label,
 )
 
 # Where a sized producer's generated k6 config is written (Punch's run state).
@@ -110,7 +121,7 @@ def _terminal_columns() -> int:
         return shutil.get_terminal_size().columns
 
 
-def _job_menu_rows(paths: List[Path]) -> tuple[List[str], str]:
+def _job_menu_rows(paths: List[Path], heading: str = "Available k6 jobs") -> tuple[List[str], str]:
     headers = ("Name", "Description", "In", "Out")
     records = []
     for path in paths:
@@ -161,7 +172,7 @@ def _job_menu_rows(paths: List[Path]) -> tuple[List[str], str]:
             cells.append(set_cell_size(value, width))
         return separator.join(cells)
 
-    title = "Available k6 jobs\n" + format_row(headers)
+    title = f"{heading}\n" + format_row(headers)
     rows = [format_row(record).replace("|", r"\|") for record in records]
     return rows, title
 
@@ -224,13 +235,15 @@ def _default_config_entry(job: K6Job) -> str:
     return f"Job default ({job.k6_config.stem})"
 
 
-def _choose_options(job: K6Job, options_dir: Path) -> Optional[Path]:
+def _choose_options(
+    job: K6Job, options_dir: Path, title: str = "Load an options preset:"
+) -> Optional[Path]:
     """A preset to pass as `k6 run --config`; None keeps the job's spec.k6.config."""
     paths = discover_options(options_dir)
     if not paths:
         return None
     entries = [_default_config_entry(job)] + [path.stem for path in paths]
-    choice = _select(entries, "Load an options preset:")
+    choice = _select(entries, title)
     if choice == 0:
         return None
     path = paths[choice - 1]
@@ -331,7 +344,7 @@ def _report(job: K6Job, result: ExecutionResult) -> int:
 
 
 def _choose_top_level_action() -> int:
-    return _select(["Run job", "Monitoring setup"], "[punch] Punch orchestrator.")
+    return _select(["Run job", "Run workflow", "Monitoring setup"], "[punch] Punch orchestrator.")
 
 
 def _monitoring_setup() -> int:
@@ -347,6 +360,8 @@ def run_menu(
     try:
         action = _choose_top_level_action()
         if action == 1:
+            return _run_workflow_menu(jobs_dir, options_dir, state_dir)
+        if action == 2:
             return _monitoring_setup()
         return _run_job_menu(jobs_dir, options_dir, state_dir)
     except _MenuCancelled:
@@ -432,3 +447,91 @@ def _run_job_menu(jobs_dir: Path, options_dir: Optional[Path], state_dir: Path) 
             print(switch_hint(plan, catalog))
     print()
     return rc
+
+
+def _pick_workflow(catalog: JobCatalog) -> List[str]:
+    """Step 1 from first_jobs, then each next step from next_jobs, until Done or
+    no job can follow."""
+    first = first_jobs(catalog)
+    rows, title = _job_menu_rows([catalog.jobs[name].source_path for name in first], "Step 1:")
+    chosen = [first[_select(rows, title)]]
+    while True:
+        candidates = next_jobs(chosen, catalog)
+        if not candidates:
+            print(
+                f"[punch] no job reads what {chosen[-1]} writes; "
+                f"the workflow has {len(chosen)} steps"
+            )
+            return chosen
+        entries = [f"{name}  reads {', '.join(datasets)}" for name, datasets in candidates]
+        if len(chosen) >= 2:
+            entries.append(f"Done ({len(chosen)} steps)")
+        choice = _select(entries, f"Step {len(chosen) + 1}, after {chosen[-1]}:")
+        if choice == len(candidates):
+            return chosen
+        chosen.append(candidates[choice][0])
+
+
+def _workflow_base_urls(plan: WorkflowPlan) -> dict[str, str]:
+    """BASE_URL per compose service, resolved as Run job resolves it, without a prompt."""
+    urls: dict[str, str] = {}
+    for step in plan.steps:
+        service = step.job.compose_service
+        if "BASE_URL" not in step.job.forward_environment or service in urls:
+            continue
+        url = os.environ.get("BASE_URL") or _default_base_url(service)
+        if url is not None:
+            urls[service] = url
+    return urls
+
+
+def _print_plan(plan: WorkflowPlan, base_urls: dict[str, str]) -> None:
+    width = max(len(step.name) for step in plan.steps)
+    print()
+    print("Punch workflow plan")
+    for step in plan.steps:
+        print(
+            f"  step {step.number}  {step.name:<{width}}  {step_label(step)}  "
+            f"({data_label(step)})"
+        )
+    for service, url in base_urls.items():
+        print(f"  BASE_URL  {service}: {url}")
+    for warning in plan.warnings:
+        print(f"[punch] warning: {warning}")
+
+
+def _run_workflow_menu(jobs_dir: Path, options_dir: Optional[Path], state_dir: Path) -> int:
+    resolved_options_dir = options_dir if options_dir is not None else jobs_dir.parent / "options"
+    try:
+        catalog = load_catalog(jobs_dir)
+    except CatalogError as error:
+        print(f"[punch] could not load the jobs in {jobs_dir}: {error}", file=sys.stderr)
+        return 1
+    if not first_jobs(catalog):
+        print(f"[punch] no job in {jobs_dir} writes data another job reads")
+        return 1
+
+    print()
+    jobs = _pick_workflow(catalog)
+    last = catalog.jobs[jobs[-1]]
+    picked = _choose_options(
+        last, resolved_options_dir, f"Load options for {last.name} (last step):"
+    )
+    answer = _prompt("Data sizing (each earlier step is sized for the next)? (Y/n)", default="y")
+    sizing = not answer.lower().startswith("n")
+    loads: List[Load] = [*([AUTO] * (len(jobs) - 1)), picked] if sizing else [picked] * len(jobs)
+    plan = plan_workflow(jobs, loads, catalog)
+    if plan.errors:
+        for error in plan.errors:
+            print(f"[punch] {error}", file=sys.stderr)
+        return 1
+    base_urls = _workflow_base_urls(plan)
+    _print_plan(plan, base_urls)
+    answer = _prompt(f"Run these {len(plan.steps)} steps? (y/N)", default="n")
+    if not answer.lower().startswith("y"):
+        print("[punch] workflow not run.")
+        return 0
+    print()
+    return run_workflow(
+        plan, catalog, environment=os.environ, base_urls=base_urls, state_dir=state_dir
+    )
