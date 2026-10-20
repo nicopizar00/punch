@@ -28,7 +28,7 @@ docker compose build
 | `punch doctor` | Check Docker, Compose, Python, and the bundled jobs |
 | `punch run <name\|path.yaml>` | Run one bundled job or any job YAML |
 | `punch run all` | Run every bundled job in order; skips one whose required environment is unset |
-| `punch menu [jobs-dir]` | Pick and run a job interactively (default: `jobs/k6/`) |
+| `punch menu [jobs-dir]` | Pick and run a job, or a Punch workflow of jobs, interactively (default: `jobs/k6/`) |
 | `punch clean` | `docker compose down --volumes --remove-orphans` |
 
 `punch run` flags:
@@ -118,6 +118,15 @@ lets script options override a config file, so a script that takes its shape fro
   `maxSeconds`. Menu: `Size for a target job`; CLI: `--size-for <target>`
   (shape from `--config`, else the target's `spec.k6.config`). Fewer rows than
   needed prints a warning; the exit code is unchanged.
+- **Workflows (menu only).** `Run workflow` builds a Punch workflow one step
+  at a time: step 1 from the jobs that need no earlier step, then only jobs
+  that read what the previous step writes, with `Done` from step 3 on. The
+  last step runs the picked options. With data sizing on (the default), every
+  earlier step is sized for the step after it, resolving from the last step
+  back; with it off, every step runs the picked options. Each step is one
+  Compose run that reads its data from the step that wrote it in this
+  workflow, and the workflow stops at the first failure. Spec:
+  [spec-menu-workflow.md](docs/specs/spec-menu-workflow.md).
 
 A data file left from an earlier run is not evidence; read
 `reports/state/punch-run.json`.
@@ -144,6 +153,7 @@ Each run writes `reports/state/punch-run.json` (the run evidence),
 `reports/logs/k6-<job>.log`, and each script's `<script>-report.html`
 and `<script>.json`. CI uploads `reports/` as `performance-suite-reports`. Schema and
 evidence rules: [validation.md](docs/jobs/validation.md).
+A menu workflow writes `reports/state/punch-workflow.json` instead.
 
 ## Docs
 
@@ -153,7 +163,7 @@ evidence rules: [validation.md](docs/jobs/validation.md).
 | [Boundaries](docs/architecture/punch-boundaries.md) | Layer ownership and anti-patterns |
 | [Validation](docs/jobs/validation.md) | Evidence contract |
 | [Decisions](docs/decisions/) | ADRs |
-| [Specs](docs/specs/) | Feature specs: data pickers, target sizing, native k6 config |
+| [Specs](docs/specs/) | Feature specs: data pickers, target sizing, native k6 config, menu workflows |
 | [CLAUDE.md](CLAUDE.md) | Project rules |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, PRs |
 

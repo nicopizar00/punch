@@ -226,12 +226,12 @@ tested contract change.
 Moving a run from a laptop to GitHub Actions changes who starts it, not what
 it does. Every runtime runs one Punch job per k6 run under the same step
 contract: validate, preflight, run, harvest, publish atomically. A Punch
-workflow is the consumer's sequence of those runs; Punch never sequences jobs
-itself.
+workflow is a sequence of those runs. The consumer orders them, except on a
+laptop, where the menu's `Run workflow` can run them in order.
 
 | Runtime | Started by | One Punch job runs as | A Punch workflow runs as | Status |
 | --- | --- | --- | --- | --- |
-| Laptop | An operator: `punch run`, `punch menu` | One `docker compose run` | The operator runs the jobs in order; the menu can switch to a missing dataset's producer | built |
+| Laptop | An operator: `punch run`, `punch menu` | One `docker compose run` | `punch menu` → `Run workflow` runs the jobs in order, one `docker compose run` each, or the operator runs them one at a time; the menu can switch to a missing dataset's producer | built |
 | GitHub Actions, Compose on the runner | A GitHub job that calls `punch run` | One `docker compose run` inside the GitHub job | The consumer's GitHub job runs the jobs in order | built: Punch's own CI runs `./bin/punch run all` in [`k6.yml`](../../.github/workflows/k6.yml) |
 | Kubernetes from a terminal | `kubectl create` or `argo submit` from a thin template | One Argo step pod from `punch-k6-run` | Two Argo Workflows linked through the shared `datasets/` prefix | built: [k8s/README.md](../../k8s/README.md) |
 | GitHub Actions submitting to Kubernetes | A GitHub job that waits for the Argo CD sync, then creates an Argo Workflow | One Argo step pod | One Argo Workflow from a Punch workflow template, one task per job | design: [orchestrator-to-kubernetes.md](orchestrator-to-kubernetes.md#github-actions) |

@@ -7,6 +7,10 @@ Semantic Versioning.
 
 ### Added
 
+- Menu workflows: `punch menu` → `Run workflow` picks jobs one step at a
+  time, sizes every earlier step for the next one (data sizing, on by
+  default), runs one Compose run per step, and writes
+  `reports/state/punch-workflow.json`. Planning lives in `punch.workflow`.
 - CI lints `src` and `tests` with ruff 0.7.4 before the unit suite: Ruff's
   default rules plus import sorting, and `ruff format --check` at line length
   100 (`ruff.toml`).
