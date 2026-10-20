@@ -27,7 +27,7 @@ discuss.
 |---|---|
 | `bin/punch` | Shell shim → `python3 -m punch` |
 | `bin/*` | Legacy wrappers over `punch run` / `docker compose` |
-| `src/punch/` | Engine: `__main__` (CLI, evidence), `job` (strict loader), `catalog` (dataset links), `data_plan` (pickers, pure), `sizing` (pure), `execution` (compose run, streams, datasets), `menu` (terminal UI) |
+| `src/punch/` | Engine: `__main__` (CLI, evidence), `job` (strict loader), `catalog` (dataset links), `data_plan` (pickers, pure), `sizing` (pure), `workflow` (Punch workflows: pure planning, `run_workflow`), `execution` (compose run, streams, datasets), `menu` (terminal UI) |
 | `k8s/` | Kubernetes runtime (ADR 0006): `punch-k6-run` WorkflowTemplate, `k6-run.sh` step, executor RBAC — no Python |
 | `src/tests/` | k6 TypeScript; `support/report.ts` builds HTML + JSON summaries |
 | `src/lib/`, `src/utils/`, `src/types/` | k6 helpers behind the `@lib` / `@utils` / `@app-types` aliases |

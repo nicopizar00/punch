@@ -14,7 +14,9 @@ A change that mixes both is runtime-affecting.
 ## Run evidence: `reports/state/punch-run.json`
 
 Written by `src/punch/__main__.py` on every `punch run`, pass or fail. The
-menu prints results to the terminal and writes no evidence.
+menu's `Run job` prints results to the terminal and writes no evidence; its
+`Run workflow` writes
+[`punch-workflow.json`](#workflow-evidence-reportsstatepunch-workflowjson).
 
 ```json
 {
@@ -48,6 +50,44 @@ Per result:
 The last five appear only when they apply. A data file left by an earlier run
 is not evidence for this one.
 
+## Workflow evidence: `reports/state/punch-workflow.json`
+
+Written by `punch.workflow.run_workflow` for the menu's `Run workflow`: before
+step 1, after every step, and on interruption. Paths are relative to the
+current directory when beneath it, absolute otherwise.
+
+```json
+{
+  "version": 1,
+  "outcome": "passed",
+  "passed": true,
+  "jobs": ["http-cart", "http-orders", "http-orders-status"],
+  "steps": [
+    {"step": 1, "job": "http-cart", "load": "auto",
+     "label": "auto: sized for step 2 (7 iterations, 1 VU)",
+     "config": "reports/state/k6-config-http-cart.json", "sizing": {"...": "..."},
+     "produce": ["carts"], "reads": {}, "builtIn": [],
+     "status": "passed", "exitCode": 0, "failure": null, "rows": {"carts": 7}}
+  ],
+  "warnings": []
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `outcome` | `running`, `passed`, `failed`, or `interrupted` |
+| `passed` | `true` only when `outcome` is `passed` |
+| `steps[].load` | `auto`, `job default`, or the options file |
+| `steps[].label` | The plan's load text for the step |
+| `steps[].config` | The file passed as `--config`; `null` for script options |
+| `steps[].sizing` | For a sized step: the `sizing` keys `punch-run.json` records |
+| `steps[].status` | `pending`, `passed`, `failed`, `skipped`, or `interrupted` |
+| `steps[].exitCode` | The k6 container's code; `null` when no container started |
+| `steps[].rows` | Rows written per dataset |
+| `warnings` | Plan warnings, then `rows repeat` warnings |
+
+A menu workflow change is verified when this file shows `"passed": true`.
+
 ## Other artifacts
 
 | Path | Written by |
@@ -55,7 +95,7 @@ is not evidence for this one.
 | `reports/logs/k6-<job>.log` | Punch: the k6 container's stdout and stderr |
 | `reports/<script>-report.html`, `reports/<script>.json` | Each k6 script's `handleSummary` (`smoke`, `catalog-gate`, `order-journey`, `bff-checkout-journey`) |
 | `reports/state/test-context.json` | `order-journey`, `bff-checkout-journey` |
-| `reports/state/k6-config-<producer>.json` | Punch, for a sized producer run |
+| `reports/state/k6-config-<producer>.json` | Punch, for a sized producer run or a sized workflow step |
 | `reports/logs/{gateway-api,catalog-api,orders-api,postgres}.log` | Punch, with `--collect-logs` |
 
 ## Validate locally

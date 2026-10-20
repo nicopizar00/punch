@@ -4,6 +4,8 @@
 > 2026-10-09: the load shape is a native k6 config, not
 > `ITERATIONS`/`VUS`/`DURATION` — see
 > [`spec-native-k6-config.md`](spec-native-k6-config.md).
+> Superseded in part 2026-10-19: the menu's `Run workflow`
+> sizes chained steps; see [`spec-menu-workflow.md`](spec-menu-workflow.md).
 
 - **Goal** — When the workflow about to run produces a dataset for a target
   workflow, the operator can size the producer run for a target run instead
