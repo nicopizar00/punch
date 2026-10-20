@@ -28,6 +28,7 @@ from punch.execution import (
     data_environment,
     data_row_count,
     execute_job,
+    print_metrics,
     used_data_paths,
 )
 from punch.job import JobError, K6Job, load_job, read_k6_config
@@ -318,21 +319,6 @@ def _choose_produce(job: K6Job, sized: Optional[SizingPlan] = None) -> tuple[str
     return tuple(chosen)
 
 
-def _print_metrics(job: K6Job) -> None:
-    if job.summary_output is None or not job.summary_output.path.exists():
-        return
-    try:
-        summary = json.loads(job.summary_output.path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    print(f"[punch] {job.name} metrics:")
-    print(f"  requests    : {summary.get('totalRequests', '?')}")
-    print(f"  error rate  : {summary.get('errorRate', 0) * 100:.2f}%")
-    print(f"  p90 duration: {summary.get('p90Ms', 0):.1f} ms")
-    print(f"  check pass  : {summary.get('checkPassRate', 0) * 100:.2f}%")
-    print(f"  duration    : {summary.get('durationMs', 0) / 1000:.1f}s")
-
-
 def _report(job: K6Job, result: ExecutionResult) -> int:
     if result.passed:
         print(f"[punch] {job.name} completed.")
@@ -436,7 +422,7 @@ def _run_job_menu(jobs_dir: Path, options_dir: Optional[Path], state_dir: Path) 
             used_data_paths(job, {}, choices), stdin=sys.stdin, stdout=sys.stdout
         )
     if result.passed:
-        _print_metrics(job)
+        print_metrics(job)
         if sized is not None:
             produced = {dataset.dataset: dataset.record_count for dataset in result.datasets}
             for line in shortfall(sized, produced):

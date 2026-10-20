@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import queue
 import re
@@ -292,6 +293,23 @@ def confirm_delete_consumed(
             path.unlink()
             deleted.append(path)
     return deleted
+
+
+def print_metrics(job: K6Job, stdout: IO[str] | None = None) -> None:
+    """The headline numbers of the job's k6 summary, when it wrote one."""
+    if job.summary_output is None or not job.summary_output.path.exists():
+        return
+    try:
+        summary = json.loads(job.summary_output.path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    output = stdout if stdout is not None else sys.stdout
+    output.write(f"[punch] {job.name} metrics:\n")
+    output.write(f"  requests    : {summary.get('totalRequests', '?')}\n")
+    output.write(f"  error rate  : {summary.get('errorRate', 0) * 100:.2f}%\n")
+    output.write(f"  p90 duration: {summary.get('p90Ms', 0):.1f} ms\n")
+    output.write(f"  check pass  : {summary.get('checkPassRate', 0) * 100:.2f}%\n")
+    output.write(f"  duration    : {summary.get('durationMs', 0) / 1000:.1f}s\n")
 
 
 def _data_record(line: str) -> tuple[str, str] | None:

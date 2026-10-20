@@ -7,18 +7,37 @@ can start with and continue with, from the catalog's dataset links.
 each step's k6 options from the last step back: an AUTO step that writes data
 for a later step is sized for that reader with `punch.sizing.size_producer`,
 so a sized reader passes its own sized config to the step before it.
+`run_workflow` runs the plan, one `execute_job` call (one Docker Compose run)
+per step, stops at the first failure, and records
+<state_dir>/punch-workflow.json before step 1, after every step, and on
+interruption.
 Spec: docs/specs/spec-menu-workflow.md.
 """
 
 from __future__ import annotations
 
+import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import IO, Any, Mapping, Sequence
 
 from punch.catalog import JobCatalog
+from punch.execution import (
+    ExecutionResult,
+    confirm_delete_consumed,
+    execute_job,
+    print_metrics,
+)
 from punch.job import JobError, K6Job, read_k6_config
-from punch.sizing import SizingError, SizingPlan, rows_needed, size_producer
+from punch.sizing import (
+    SizingError,
+    SizingPlan,
+    rows_needed,
+    size_producer,
+    sizing_evidence,
+    write_producer_config,
+)
 
 # A step's load: AUTO (sized for its reader when Punch can size the pair), a
 # k6 options JSON path, or None (the job's own spec.k6.config, never sized).
@@ -276,3 +295,186 @@ def data_label(step: WorkflowStep) -> str:
     parts += [f"{dataset}: built-in data" for dataset in step.built_in]
     parts += [f"writes {dataset}" for dataset in step.produce]
     return "; ".join(parts) or "none"
+
+
+EVIDENCE_NAME = "punch-workflow.json"
+
+
+def run_workflow(
+    plan: WorkflowPlan,
+    catalog: JobCatalog,
+    *,
+    environment: Mapping[str, str],
+    base_urls: Mapping[str, str],
+    state_dir: Path,
+    stdin: IO[str] | None = None,
+    stdout: IO[str] | None = None,
+) -> int:
+    """Run every step in order, one Docker Compose run each; stop at the first
+    failure. Returns 0, or the failed step's k6 exit code (1 when k6 exited 0 or
+    never ran). A KeyboardInterrupt marks the running step, records the
+    evidence, and propagates."""
+    output = stdout if stdout is not None else sys.stdout
+    terminal = stdin if stdin is not None else sys.stdin
+    for step in plan.steps:
+        if step.sizing is not None:
+            step.config_path = write_producer_config(step.sizing, state_dir)
+    evidence = _evidence(plan)
+    path = state_dir / EVIDENCE_NAME
+    _write_evidence(path, evidence)
+    by_number = {step.number: step for step in plan.steps}
+    exit_code = 0
+    started_docker = False
+    for step, record in zip(plan.steps, evidence["steps"]):
+        if exit_code != 0:
+            record["status"] = "skipped"
+            continue
+        output.write(f"[punch] workflow step {step.number}/{len(plan.steps)}: {step.name}\n")
+        output.flush()
+        try:
+            result = execute_job(
+                step.job,
+                environment=_step_environment(step, environment, base_urls),
+                produce=step.produce,
+                data_overrides=_data_overrides(step, by_number),
+                optional_choices=_optional_choices(step),
+                producers_of=catalog.producers_of,
+                docker_run_confirmed=True,
+                config=step.config_path,
+            )
+        except KeyboardInterrupt:
+            record["status"] = "interrupted"
+            for later in evidence["steps"][step.number :]:
+                later["status"] = "skipped"
+            evidence["outcome"] = "interrupted"
+            _write_evidence(path, evidence)
+            output.write(f"[punch] evidence written: {_display(path)}\n")
+            raise
+        started_docker = started_docker or result.child_exit_code is not None
+        _record_result(record, step, result)
+        if result.passed:
+            print_metrics(step.job, output)
+            for warning in _shortfall(step, record["rows"]):
+                evidence["warnings"].append(warning)
+                output.write(f"[punch] warning: {warning}\n")
+        else:
+            exit_code = result.child_exit_code or 1
+        _write_evidence(path, evidence)
+    evidence["outcome"] = "passed" if exit_code == 0 else "failed"
+    evidence["passed"] = exit_code == 0
+    _write_evidence(path, evidence)
+    output.write(f"[punch] evidence written: {_display(path)}\n")
+    if started_docker:
+        confirm_delete_consumed(_written_paths(plan), stdin=terminal, stdout=output)
+    return exit_code
+
+
+def _display(path: Path) -> str:
+    """`path` relative to the current directory when beneath it, else absolute."""
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def _load_text(load: Load) -> str:
+    if isinstance(load, Path):
+        return _display(load)
+    return "job default" if load is None else "auto"
+
+
+def _evidence(plan: WorkflowPlan) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "outcome": "running",
+        "passed": False,
+        "jobs": [step.name for step in plan.steps],
+        "steps": [
+            {
+                "step": step.number,
+                "job": step.name,
+                "load": _load_text(step.load),
+                "label": step_label(step),
+                "config": _display(step.config_path) if step.config_path is not None else None,
+                "sizing": sizing_evidence(step.sizing, {}) if step.sizing is not None else None,
+                "produce": list(step.produce),
+                "reads": dict(step.reads),
+                "builtIn": list(step.built_in),
+                "status": "pending",
+                "exitCode": None,
+                "failure": None,
+                "rows": {},
+            }
+            for step in plan.steps
+        ],
+        "warnings": list(plan.warnings),
+    }
+
+
+def _write_evidence(path: Path, evidence: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+
+
+def _record_result(record: dict[str, Any], step: WorkflowStep, result: ExecutionResult) -> None:
+    rows = {dataset.dataset: dataset.record_count for dataset in result.datasets}
+    record.update(
+        status="passed" if result.passed else "failed",
+        exitCode=result.child_exit_code,
+        failure=result.failure,
+        rows=rows,
+    )
+    if step.sizing is not None:
+        record["sizing"] = sizing_evidence(step.sizing, rows)
+
+
+def _step_environment(
+    step: WorkflowStep, environment: Mapping[str, str], base_urls: Mapping[str, str]
+) -> dict[str, str]:
+    merged = dict(environment)
+    url = base_urls.get(step.job.compose_service)
+    if url and "BASE_URL" in step.job.forward_environment:
+        merged["BASE_URL"] = url
+    return merged
+
+
+def _data_overrides(step: WorkflowStep, by_number: dict[int, WorkflowStep]) -> dict[str, Path]:
+    """Each read pointed at the file its writer wrote."""
+    overrides: dict[str, Path] = {}
+    for dataset, writer in step.reads.items():
+        data = by_number[writer].job.data
+        assert data is not None  # a writer produces the dataset
+        overrides[dataset] = data.host_path(dataset)
+    return overrides
+
+
+def _optional_choices(step: WorkflowStep) -> dict[str, bool]:
+    """True for an optional dataset an earlier step wrote; False for built-in data."""
+    data = step.job.data
+    if data is None:
+        return {}
+    choices = {dataset: True for dataset in step.reads if dataset in data.optional}
+    choices.update((dataset, False) for dataset in step.built_in)
+    return choices
+
+
+def _shortfall(step: WorkflowStep, rows: Mapping[str, int]) -> list[str]:
+    return [
+        f"step {step.number} {step.name} wrote {rows.get(dataset, 0)} {dataset} rows; "
+        f"step {step.readers[dataset][0]} reads {needed}, so rows repeat"
+        for dataset, needed in step.rows_needed.items()
+        if rows.get(dataset, 0) < needed
+    ]
+
+
+def _written_paths(plan: WorkflowPlan) -> dict[str, Path]:
+    """Every dataset file this workflow writes, for the delete prompt."""
+    paths: dict[str, Path] = {}
+    for step in plan.steps:
+        data = step.job.data
+        if data is None:
+            continue
+        for dataset in step.produce:
+            paths[dataset] = data.host_path(dataset)
+    return paths

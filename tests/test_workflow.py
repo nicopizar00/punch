@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from punch.catalog import load_catalog
-from punch.workflow import AUTO, data_label, first_jobs, next_jobs, plan_workflow, step_label
+from punch.execution import DatasetResult, ExecutionResult
+from punch.workflow import (
+    AUTO,
+    data_label,
+    first_jobs,
+    next_jobs,
+    plan_workflow,
+    run_workflow,
+    step_label,
+)
 
 # The parent repository's http-cart, http-orders, and http-orders-status values.
 CART_SIZING = {"iterationSeconds": 1.1, "maxSeconds": 270}
@@ -324,6 +335,254 @@ class PlanTests(WorkflowCase):
             with self.subTest(case=case):
                 plan = plan_workflow(jobs, loads, catalog)
                 self.assertEqual(plan.errors, [error])
+
+
+class RunTests(WorkflowCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.write_chain()
+        self.iterations_5 = self.write_options("5-iterations", ITERATIONS_5)
+        self.state_dir = self.root / "state"
+        self.calls: list[tuple[str, dict]] = []
+        # job name -> (k6 exit code or None, passed, rows written) or "interrupt"
+        self.outcomes: dict = {}
+
+    def passing(self) -> dict:
+        return {
+            "cart": (0, True, {"carts": 7}),
+            "orders": (0, True, {"orders": 6}),
+            "status": (0, True, {}),
+        }
+
+    def fake_execute(self, job, **kwargs) -> ExecutionResult:
+        self.calls.append((job.name, kwargs))
+        outcome = self.outcomes.get(job.name, (0, True, {}))
+        if outcome == "interrupt":
+            raise KeyboardInterrupt
+        code, passed, rows = outcome
+        datasets = tuple(
+            DatasetResult(dataset, self.root / "data" / f"{dataset}.csv", count, passed)
+            for dataset, count in rows.items()
+        )
+        failure = None if passed else "k6 failed"
+        return ExecutionResult(job.name, ("docker",), code, passed, failure, datasets)
+
+    def run_plan(self, loads, jobs=("cart", "orders", "status"), stdin=None):
+        plan = plan_workflow(list(jobs), list(loads), self.catalog())
+        self.assertEqual(plan.errors, [])
+        output = io.StringIO()
+        with patch("punch.workflow.execute_job", side_effect=self.fake_execute):
+            code = run_workflow(
+                plan,
+                self.catalog(),
+                environment={"PATH": "/bin"},
+                base_urls={"k6": "http://app"},
+                state_dir=self.state_dir,
+                stdin=stdin if stdin is not None else io.StringIO(),
+                stdout=output,
+            )
+        return code, output.getvalue(), self.evidence()
+
+    def evidence(self) -> dict:
+        return json.loads((self.state_dir / "punch-workflow.json").read_text(encoding="utf-8"))
+
+    def test_runs_every_step_in_order_with_its_data_wiring(self) -> None:
+        self.outcomes = self.passing()
+        code, text, evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        self.assertEqual(code, 0)
+        self.assertEqual([name for name, _ in self.calls], ["cart", "orders", "status"])
+        cart, orders, status = (kwargs for _, kwargs in self.calls)
+        data = self.root / "data"
+        self.assertEqual(
+            (cart["produce"], cart["data_overrides"], cart["optional_choices"]),
+            (("carts",), {}, {}),
+        )
+        self.assertEqual(orders["data_overrides"], {"carts": data / "carts.csv"})
+        self.assertEqual(orders["produce"], ("orders",))
+        self.assertEqual(status["data_overrides"], {"orders": data / "orders.csv"})
+        self.assertEqual(status["produce"], ())
+        self.assertEqual(cart["config"], self.state_dir / "k6-config-cart.json")
+        self.assertEqual(orders["config"], self.state_dir / "k6-config-orders.json")
+        self.assertEqual(status["config"], self.iterations_5)
+        self.assertTrue(all(kwargs["docker_run_confirmed"] for _, kwargs in self.calls))
+        self.assertEqual(
+            json.loads((self.state_dir / "k6-config-cart.json").read_text(encoding="utf-8")),
+            {"vus": 1, "iterations": 7},
+        )
+        self.assertEqual(evidence["version"], 1)
+        self.assertEqual((evidence["outcome"], evidence["passed"]), ("passed", True))
+        self.assertEqual(evidence["jobs"], ["cart", "orders", "status"])
+        self.assertEqual([step["status"] for step in evidence["steps"]], ["passed"] * 3)
+        self.assertEqual(
+            [step["rows"] for step in evidence["steps"]], [{"carts": 7}, {"orders": 6}, {}]
+        )
+        self.assertEqual(evidence["steps"][0]["sizing"]["producerIterations"], 7)
+        self.assertEqual(evidence["steps"][0]["sizing"]["producedRows"], {"carts": 7})
+        self.assertIsNone(evidence["steps"][2]["sizing"])
+        self.assertEqual(evidence["steps"][1]["reads"], {"carts": 1})
+        self.assertEqual(
+            evidence["steps"][0]["label"], "auto: sized for step 2 (7 iterations, 1 VU)"
+        )
+        self.assertEqual(evidence["warnings"], [])
+        self.assertIn("[punch] evidence written: ", text)
+
+    def test_a_failed_step_stops_the_workflow_with_its_k6_exit_code(self) -> None:
+        self.outcomes = {**self.passing(), "orders": (99, False, {})}
+        code, _text, evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        self.assertEqual(code, 99)
+        self.assertEqual([name for name, _ in self.calls], ["cart", "orders"])
+        self.assertEqual(
+            [step["status"] for step in evidence["steps"]], ["passed", "failed", "skipped"]
+        )
+        self.assertEqual(
+            (evidence["steps"][1]["exitCode"], evidence["steps"][1]["failure"]), (99, "k6 failed")
+        )
+        self.assertEqual((evidence["outcome"], evidence["passed"]), ("failed", False))
+
+    def test_a_step_that_fails_after_k6_exits_0_still_exits_1(self) -> None:
+        self.outcomes = {"cart": (0, False, {})}
+        code, _text, evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        self.assertEqual(code, 1)
+        self.assertEqual(evidence["outcome"], "failed")
+
+    def test_a_step_that_never_starts_docker_exits_1_without_a_delete_prompt(self) -> None:
+        self.outcomes = {"cart": (None, False, {})}
+        (self.root / "data").mkdir()
+        (self.root / "data" / "carts.csv").write_text("id\n1\n", encoding="utf-8")
+        code, text, evidence = self.run_plan(
+            [AUTO, AUTO, self.iterations_5], stdin=_Terminal("y\n")
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual([name for name, _ in self.calls], ["cart"])
+        self.assertNotIn("Delete consumed", text)
+        self.assertTrue((self.root / "data" / "carts.csv").exists())
+        self.assertIsNone(evidence["steps"][0]["exitCode"])
+        self.assertEqual(
+            [step["status"] for step in evidence["steps"]], ["failed", "skipped", "skipped"]
+        )
+
+    def test_an_interrupt_marks_the_step_and_skips_the_rest(self) -> None:
+        self.outcomes = {**self.passing(), "orders": "interrupt"}
+        plan = plan_workflow(
+            ["cart", "orders", "status"], [AUTO, AUTO, self.iterations_5], self.catalog()
+        )
+        with patch("punch.workflow.execute_job", side_effect=self.fake_execute):
+            with self.assertRaises(KeyboardInterrupt):
+                run_workflow(
+                    plan,
+                    self.catalog(),
+                    environment={},
+                    base_urls={},
+                    state_dir=self.state_dir,
+                    stdin=io.StringIO(),
+                    stdout=io.StringIO(),
+                )
+        evidence = self.evidence()
+        self.assertEqual((evidence["outcome"], evidence["passed"]), ("interrupted", False))
+        self.assertEqual(
+            [step["status"] for step in evidence["steps"]], ["passed", "interrupted", "skipped"]
+        )
+
+    def test_a_writer_short_of_rows_warns_and_the_workflow_continues(self) -> None:
+        self.outcomes = {**self.passing(), "cart": (0, True, {"carts": 4})}
+        code, text, evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        warning = "step 1 cart wrote 4 carts rows; step 2 reads 6, so rows repeat"
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.calls), 3)
+        self.assertIn(f"[punch] warning: {warning}\n", text)
+        self.assertEqual(evidence["warnings"], [warning])
+
+    def test_optional_reads_use_the_writer_file_and_unwritten_ones_built_in_data(self) -> None:
+        self.write("cart", produces={"carts": ["audit", "orders"]}, sizing=CART_SIZING)
+        self.write("audit", optional=["carts"])
+        self.outcomes = {"cart": (0, True, {"carts": 5})}
+        self.run_plan([self.iterations_5, self.iterations_5], jobs=("cart", "audit"))
+        audit = dict(self.calls)["audit"]
+        self.assertEqual(audit["optional_choices"], {"carts": True})
+        self.assertEqual(audit["data_overrides"], {"carts": self.root / "data" / "carts.csv"})
+        self.calls.clear()
+        self.run_plan([self.iterations_5], jobs=("audit",))
+        self.assertEqual(dict(self.calls)["audit"]["optional_choices"], {"carts": False})
+
+    def test_base_url_reaches_only_the_jobs_that_forward_it(self) -> None:
+        self.write("status", requires=["orders"], sizing=STATUS_SIZING, forward=["BASE_URL"])
+        self.outcomes = self.passing()
+        self.run_plan([AUTO, AUTO, self.iterations_5])
+        environments = {name: kwargs["environment"] for name, kwargs in self.calls}
+        self.assertEqual(environments["cart"], {"PATH": "/bin"})
+        self.assertEqual(environments["status"], {"PATH": "/bin", "BASE_URL": "http://app"})
+
+    def test_a_passing_step_prints_its_metrics(self) -> None:
+        self.write("status", requires=["orders"], sizing=STATUS_SIZING, summary="status.json")
+        (self.root / "status.json").write_text(
+            json.dumps(
+                {
+                    "totalRequests": 5,
+                    "errorRate": 0,
+                    "p90Ms": 12.5,
+                    "checkPassRate": 1,
+                    "durationMs": 1500,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.outcomes = self.passing()
+        _code, text, _evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        self.assertIn("[punch] status metrics:\n  requests    : 5\n", text)
+        self.assertIn("  duration    : 1.5s\n", text)
+
+    def test_the_written_datasets_are_offered_for_deletion_once(self) -> None:
+        self.outcomes = self.passing()
+        data = self.root / "data"
+        data.mkdir()
+        for dataset in ("carts", "orders"):
+            (data / f"{dataset}.csv").write_text("id\n1\n", encoding="utf-8")
+        code, text, _evidence = self.run_plan(
+            [AUTO, AUTO, self.iterations_5], stdin=_Terminal("n\nn\n")
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(text.count('Delete consumed "carts" data'), 1)
+        self.assertEqual(text.count('Delete consumed "orders" data'), 1)
+        self.assertTrue((data / "carts.csv").exists())
+
+    def test_evidence_from_an_earlier_run_is_replaced_before_step_1(self) -> None:
+        self.state_dir.mkdir()
+        (self.state_dir / "punch-workflow.json").write_text(
+            '{"outcome": "passed", "stale": true}', encoding="utf-8"
+        )
+        self.outcomes = self.passing()
+        seen: list[dict] = []
+        original = self.fake_execute
+
+        def watch(job, **kwargs) -> ExecutionResult:
+            if job.name == "cart":
+                seen.append(self.evidence())
+            return original(job, **kwargs)
+
+        self.fake_execute = watch
+        self.run_plan([AUTO, AUTO, self.iterations_5])
+        [at_start] = seen
+        self.assertEqual(at_start["outcome"], "running")
+        self.assertNotIn("stale", at_start)
+        self.assertEqual({step["status"] for step in at_start["steps"]}, {"pending"})
+
+    def test_evidence_paths_are_relative_beneath_the_current_directory(self) -> None:
+        self.outcomes = self.passing()
+        with patch.object(Path, "cwd", return_value=self.root):
+            _code, _text, evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        self.assertEqual(evidence["steps"][0]["config"], "state/k6-config-cart.json")
+        self.assertEqual(evidence["steps"][0]["load"], "auto")
+        self.assertEqual(evidence["steps"][2]["load"], "5-iterations.json")
+        self.calls.clear()
+        _code, _text, evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        self.assertEqual(
+            evidence["steps"][0]["config"], str(self.state_dir / "k6-config-cart.json")
+        )
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 if __name__ == "__main__":
