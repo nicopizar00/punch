@@ -133,8 +133,12 @@ the parent repository (`scripts/pg/perf_workflow.py`), outside Punch.
    - `step <n>: unknown job "<name>"`;
    - `step <n> <job> repeats step <m>`;
    - `step <n> <job>: <JobError text>` for an unreadable `Path` load;
+   - `step <n> <job>: unknown load <value>` for a load that is not `AUTO`,
+     `None`, or a `Path`;
    - `step <n> <job> reads <D>; no earlier step writes it. Put <producers>
-     before step <n>`.
+     before step <n>`;
+   - `step <n> <job> reads <D> from step <s>, but <path> is outside its data
+     directory <dir>`.
 
    It records these warnings:
    - `steps <a> and <b> read <D> from step <s>; its rows are reused`;
@@ -147,8 +151,9 @@ the parent repository (`scripts/pg/perf_workflow.py`), outside Punch.
 2. **Data wiring.** For each step, `run_workflow` passes `execute_job`:
    - `produce`: the step's `produce`;
    - `data_overrides`: every dataset in `reads` mapped to its writer's
-     `job.data.host_path(D)`, so steps with different `data.directory` values
-     still link;
+     `job.data.host_path(D)`. `execution.data_environment` turns an override
+     into a container path relative to the reader's `data.directory`, so
+     `plan_workflow` rejects a writer whose file lies outside it;
    - `optional_choices`: `True` for each optional dataset in `reads`, `False`
      for each dataset in `built_in`;
    - `config`: the sized config file `write_producer_config(sizing,
@@ -283,6 +288,8 @@ the parent repository (`scripts/pg/perf_workflow.py`), outside Punch.
 - An optional dataset with no earlier writer runs on built-in data, even when
   a file with rows exists at its path.
 - `n` at `Run these <n> steps?`: zero Compose runs, exit 0.
+- A writer whose dataset file lies outside the reader's `data.directory`:
+  the plan error, zero Compose runs, exit 1.
 - No job or dataset literal is added to `src/punch/*.py`.
 
 ## Testing
