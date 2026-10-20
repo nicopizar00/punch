@@ -1,6 +1,6 @@
 # Spec: Punch workflows in the menu
 
-> **Status:** Proposed 2026-10-19. Supersedes in part
+> **Status:** Implemented 2026-10-19. Supersedes in part
 > [`spec-target-data-sizing.md`](spec-target-data-sizing.md): its "Chained
 > sizing" non-goal and its "Sizing never chains a second run" principle no
 > longer bind the menu's `Run workflow` option. They still bind `Run job`
