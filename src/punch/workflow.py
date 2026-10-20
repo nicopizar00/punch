@@ -309,12 +309,14 @@ def run_workflow(
     state_dir: Path,
     stdin: IO[str] | None = None,
     stdout: IO[str] | None = None,
+    stderr: IO[str] | None = None,
 ) -> int:
     """Run every step in order, one Docker Compose run each; stop at the first
     failure. Returns 0, or the failed step's k6 exit code (1 when k6 exited 0 or
     never ran). A KeyboardInterrupt marks the running step, records the
     evidence, and propagates."""
     output = stdout if stdout is not None else sys.stdout
+    errors = stderr if stderr is not None else sys.stderr
     terminal = stdin if stdin is not None else sys.stdin
     for step in plan.steps:
         if step.sizing is not None:
@@ -324,7 +326,8 @@ def run_workflow(
     _write_evidence(path, evidence)
     by_number = {step.number: step for step in plan.steps}
     exit_code = 0
-    started_docker = False
+    # dataset -> the file a step of this run published
+    written: dict[str, Path] = {}
     for step, record in zip(plan.steps, evidence["steps"]):
         if exit_code != 0:
             record["status"] = "skipped"
@@ -350,7 +353,7 @@ def run_workflow(
             _write_evidence(path, evidence)
             output.write(f"[punch] evidence written: {_display(path)}\n")
             raise
-        started_docker = started_docker or result.child_exit_code is not None
+        written.update((data.dataset, data.path) for data in result.datasets if data.published)
         _record_result(record, step, result)
         if result.passed:
             print_metrics(step.job, output)
@@ -359,13 +362,19 @@ def run_workflow(
                 output.write(f"[punch] warning: {warning}\n")
         else:
             exit_code = result.child_exit_code or 1
+            reason = result.failure or f"exit code {exit_code}"
+            errors.write(f"[punch] step {step.number} {step.name} failed: {reason}\n")
         _write_evidence(path, evidence)
     evidence["outcome"] = "passed" if exit_code == 0 else "failed"
     evidence["passed"] = exit_code == 0
     _write_evidence(path, evidence)
+    if exit_code == 0:
+        output.write(f"[punch] workflow passed: {_count(len(plan.steps), 'step')}.\n")
+    else:
+        errors.write(f"[punch] {_failed_summary(evidence)}.\n")
     output.write(f"[punch] evidence written: {_display(path)}\n")
-    if started_docker:
-        confirm_delete_consumed(_written_paths(plan), stdin=terminal, stdout=output)
+    if written:
+        confirm_delete_consumed(written, stdin=terminal, stdout=output)
     return exit_code
 
 
@@ -397,7 +406,7 @@ def _evidence(plan: WorkflowPlan) -> dict[str, Any]:
                 "load": _load_text(step.load),
                 "label": step_label(step),
                 "config": _display(step.config_path) if step.config_path is not None else None,
-                "sizing": sizing_evidence(step.sizing, {}) if step.sizing is not None else None,
+                "sizing": _planned_sizing(step.sizing) if step.sizing is not None else None,
                 "produce": list(step.produce),
                 "reads": dict(step.reads),
                 "builtIn": list(step.built_in),
@@ -418,7 +427,7 @@ def _write_evidence(path: Path, evidence: Mapping[str, Any]) -> None:
 
 
 def _record_result(record: dict[str, Any], step: WorkflowStep, result: ExecutionResult) -> None:
-    rows = {dataset.dataset: dataset.record_count for dataset in result.datasets}
+    rows = {data.dataset: data.record_count for data in result.datasets if data.published}
     record.update(
         status="passed" if result.passed else "failed",
         exitCode=result.child_exit_code,
@@ -468,13 +477,16 @@ def _shortfall(step: WorkflowStep, rows: Mapping[str, int]) -> list[str]:
     ]
 
 
-def _written_paths(plan: WorkflowPlan) -> dict[str, Path]:
-    """Every dataset file this workflow writes, for the delete prompt."""
-    paths: dict[str, Path] = {}
-    for step in plan.steps:
-        data = step.job.data
-        if data is None:
-            continue
-        for dataset in step.produce:
-            paths[dataset] = data.host_path(dataset)
-    return paths
+def _planned_sizing(sizing: SizingPlan) -> dict[str, Any]:
+    """Sizing evidence before the step runs: nothing produced yet."""
+    return {**sizing_evidence(sizing, {}), "producedRows": None, "short": None}
+
+
+def _failed_summary(evidence: Mapping[str, Any]) -> str:
+    """Where the workflow stopped, and which later steps it skipped."""
+    failed = next(record for record in evidence["steps"] if record["status"] == "failed")
+    skipped = [str(record["step"]) for record in evidence["steps"] if record["status"] == "skipped"]
+    text = f"workflow failed at step {failed['step']} {failed['job']}"
+    if skipped:
+        text += f"; {'step' if len(skipped) == 1 else 'steps'} {_and(skipped)} skipped"
+    return text

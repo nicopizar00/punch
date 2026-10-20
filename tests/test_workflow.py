@@ -367,7 +367,7 @@ class RunTests(WorkflowCase):
         failure = None if passed else "k6 failed"
         return ExecutionResult(job.name, ("docker",), code, passed, failure, datasets)
 
-    def run_plan(self, loads, jobs=("cart", "orders", "status"), stdin=None):
+    def run_plan(self, loads, jobs=("cart", "orders", "status"), stdin=None, stderr=None):
         plan = plan_workflow(list(jobs), list(loads), self.catalog())
         self.assertEqual(plan.errors, [])
         output = io.StringIO()
@@ -380,6 +380,7 @@ class RunTests(WorkflowCase):
                 state_dir=self.state_dir,
                 stdin=stdin if stdin is not None else io.StringIO(),
                 stdout=output,
+                stderr=stderr if stderr is not None else io.StringIO(),
             )
         return code, output.getvalue(), self.evidence()
 
@@ -578,6 +579,45 @@ class RunTests(WorkflowCase):
         self.assertEqual(
             evidence["steps"][0]["config"], str(self.state_dir / "k6-config-cart.json")
         )
+
+    def test_a_failed_step_prints_why_and_where_the_workflow_stopped(self) -> None:
+        self.outcomes = {**self.passing(), "orders": (99, False, {})}
+        errors = io.StringIO()
+        code, _text, _evidence = self.run_plan([AUTO, AUTO, self.iterations_5], stderr=errors)
+        self.assertEqual(code, 99)
+        self.assertIn("[punch] step 2 orders failed: k6 failed\n", errors.getvalue())
+        self.assertIn(
+            "[punch] workflow failed at step 2 orders; step 3 skipped.\n", errors.getvalue()
+        )
+
+    def test_a_passing_workflow_says_so(self) -> None:
+        self.outcomes = self.passing()
+        _code, text, _evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        self.assertIn("[punch] workflow passed: 3 steps.\n", text)
+
+    def test_only_files_this_run_published_are_offered_for_deletion(self) -> None:
+        self.outcomes = {"cart": (99, False, {"carts": 7})}
+        data = self.root / "data"
+        data.mkdir()
+        for dataset in ("carts", "orders"):
+            (data / f"{dataset}.csv").write_text("id\n1\n", encoding="utf-8")
+        code, text, _evidence = self.run_plan(
+            [AUTO, AUTO, self.iterations_5], stdin=_Terminal("y\ny\n")
+        )
+        self.assertEqual(code, 99)
+        self.assertNotIn("Delete consumed", text)
+        self.assertTrue((data / "carts.csv").exists())
+        self.assertTrue((data / "orders.csv").exists())
+
+    def test_evidence_counts_only_published_rows_and_none_for_steps_that_never_ran(self) -> None:
+        self.outcomes = {"cart": (99, False, {"carts": 7})}
+        _code, _text, evidence = self.run_plan([AUTO, AUTO, self.iterations_5])
+        cart, orders, _status = evidence["steps"]
+        self.assertEqual(cart["rows"], {})
+        self.assertEqual(cart["sizing"]["producedRows"], {"carts": 0})
+        self.assertTrue(cart["sizing"]["short"])
+        self.assertIsNone(orders["sizing"]["producedRows"])
+        self.assertIsNone(orders["sizing"]["short"])
 
 
 class _Terminal(io.StringIO):
