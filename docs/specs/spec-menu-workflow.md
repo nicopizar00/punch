@@ -172,15 +172,19 @@ the parent repository (`scripts/pg/perf_workflow.py`), outside Punch.
       it warns `step <s> <job> wrote <r> <D> rows; step <n> reads <needed>, so
       rows repeat` and continues.
    2. The first failing step stops the workflow; every later step becomes
-      `skipped`. The exit code is the failed step's k6 exit code, or 1 when
-      k6 never ran.
+      `skipped`, and `[punch] step <n> <job> failed: <reason>` goes to
+      stderr. The exit code is the failed step's k6 exit code, or 1 when k6
+      exited 0 or never ran.
    3. `KeyboardInterrupt` during a step marks it `interrupted` and every
       later step `skipped`, writes the evidence, and re-raises, so the menu
       exits 130 as it does today.
-   4. After the last step that ran, when any step started Docker,
-      `confirm_delete_consumed` offers to delete the dataset files this
-      workflow wrote, once. It asks only on a terminal; the default is no.
-   5. All steps passing → exit code 0.
+   4. After the last step that ran, `confirm_delete_consumed` offers to
+      delete the dataset files this workflow's steps published, once each.
+      It asks only on a terminal; the default is no.
+   5. All steps passing → exit code 0. The last line before the evidence
+      path is `[punch] workflow passed: <n> steps.`, or on stderr
+      `[punch] workflow failed at step <n> <job>[; steps <a> and <b>
+      skipped].`
 
 4. **Evidence.** `run_workflow` writes `<state_dir>/punch-workflow.json`
    before step 1, after every step, and on interruption, then prints
@@ -196,11 +200,11 @@ the parent repository (`scripts/pg/perf_workflow.py`), outside Punch.
    | `steps[].load` | `auto`, `job default`, or the options file path |
    | `steps[].label` | `step_label(step)` |
    | `steps[].config` | The path passed as `--config`, or `null` for script options |
-   | `steps[].sizing` | `sizing_evidence(plan, produced)` for a sized step, else `null` |
+   | `steps[].sizing` | `sizing_evidence(plan, produced)` for a sized step, else `null`; `producedRows` and `short` are `null` until the step runs |
    | `steps[].produce`, `steps[].reads`, `steps[].builtIn` | The step's data wiring |
    | `steps[].status` | `pending`, `passed`, `failed`, `skipped`, or `interrupted` |
    | `steps[].exitCode`, `steps[].failure` | From the step's `ExecutionResult`, or `null` |
-   | `steps[].rows` | Dataset → rows written (`DatasetResult.record_count`) |
+   | `steps[].rows` | Dataset → rows the step published (`DatasetResult.record_count` of each published dataset) |
    | `warnings` | Plan warnings, then run warnings, in order |
 
    Paths are strings relative to the current working directory when they lie

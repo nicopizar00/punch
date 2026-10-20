@@ -80,10 +80,10 @@ current directory when beneath it, absolute otherwise.
 | `steps[].load` | `auto`, `job default`, or the options file |
 | `steps[].label` | The plan's load text for the step |
 | `steps[].config` | The file passed as `--config`; `null` for script options |
-| `steps[].sizing` | For a sized step: the `sizing` keys `punch-run.json` records |
+| `steps[].sizing` | For a sized step: the `sizing` keys `punch-run.json` records; `producedRows` and `short` are `null` until the step runs |
 | `steps[].status` | `pending`, `passed`, `failed`, `skipped`, or `interrupted` |
 | `steps[].exitCode` | The k6 container's code; `null` when no container started |
-| `steps[].rows` | Rows written per dataset |
+| `steps[].rows` | Rows published per dataset; a failed step publishes none |
 | `warnings` | Plan warnings, then `rows repeat` warnings |
 
 A menu workflow change is verified when this file shows `"passed": true`.
